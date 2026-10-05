@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "883473585633",
+    "project_id": "bluff-master-61e30",
+    "storage_bucket": "bluff-master-61e30.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:883473585633:android:4498a66a2795c83a426ea0",
+        "android_client_info": {
+          "package_name": "com.example.bluff_master"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCad0vSVRLsRSP8_-dJjItSmBOW4gdWFsQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
