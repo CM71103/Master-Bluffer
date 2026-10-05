@@ -1,60 +1,81 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../services/socket_service.dart';
+import '../theme.dart';
 
-class HomeScreen extends StatelessWidget{
+class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
-  @override
-  Widget build(BuildContext context){
-    final user = FirebaseAuth.instance.currentUser;
-
-    return Scaffold(
-      appBar:AppBar(
-        title:Text('Bluff Master'),
-        backgroundColor:Color(0xFF1A1A2E),
-        foregroundColor: Colors.white,
-        actions:[
-          IconButton(
-            icon:Icon(Icons.logout),
-            onPressed:()async{
-              await FirebaseAuth.instance.signOut();
-              if(context.mounted){
-                Navigator.pushNamedAndRemoveUntil(context,'/login',(route)=>false);
-                // it navigates to a named route then pops routes until a predicate is satisfied , here as as the predicate is route=>false all routes before it get removed from stack hence it cannot be moved backward
-              }
-            }
-          )
-        ]
-      ),
-      body:Center(
-        child:Column(
-          mainAxisAlignment:MainAxisAlignment.center,
-          children:[
-            Icon(Icons.verified_user,size:80,color:Colors.green),
-            SizedBox(height: 16),
-            Text(
-              user?.isAnonymous == true
-              ? 'Welcome Guest'
-              :'Welcome, ${user?.displayName ?? user?.email ?? 'Player'}',
-              // here user.email is fallbalck for user.dispayname 
-              style:TextStyle(fontSize:20),
-              textAlign:TextAlign.center,
-            ),
-            SizedBox(height:32),
-            ElevatedButton(
-              onPressed:(){
-                Navigator.pushNamed(context,'/lobby');
-              },
-              child:Text("Go To Lobby"),
-            )
-          ]
-        )
-      )
-    );
-
+  Future<void> _logout(BuildContext context) async {
+    SocketService.instance.disconnect();
+    await FirebaseAuth.instance.signOut();
+    // AuthGate (the root route) now shows the Login screen. Clear any
+    // screens still on top so the user cannot go "back" into the app.
+    if (context.mounted) Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    final name = user?.isAnonymous == true
+        ? 'Guest'
+        : (user?.displayName?.isNotEmpty == true
+            ? user!.displayName!
+            : (user?.email ?? 'Player'));
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Bluff Master'),
+        actions: [
+          IconButton(
+            tooltip: 'Profile',
+            icon: const Icon(Icons.account_circle),
+            onPressed: () => Navigator.pushNamed(context, '/profile'),
+          ),
+          IconButton(
+            tooltip: 'Logout',
+            icon: const Icon(Icons.logout),
+            onPressed: () => _logout(context),
+          ),
+        ],
+      ),
+      body: ResponsiveBody(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.theater_comedy, size: 90, color: kPrimary),
+              const SizedBox(height: 16),
+              Text('Welcome, $name',
+                  style: const TextStyle(
+                      fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 8),
+              const Text('Create a room or join friends with a code',
+                  style: TextStyle(color: Colors.grey), textAlign: TextAlign.center),
+              const SizedBox(height: 40),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.meeting_room),
+                label: const Text('Create / Join Room', style: TextStyle(fontSize: 17)),
+                onPressed: () => Navigator.pushNamed(context, '/lobby'),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.bar_chart),
+                label: const Text('My Stats & History', style: TextStyle(fontSize: 17)),
+                onPressed: () => Navigator.pushNamed(context, '/profile'),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.leaderboard),
+                label: const Text('Leaderboard', style: TextStyle(fontSize: 17)),
+                onPressed: () => Navigator.pushNamed(context, '/leaderboard'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
-  
-
-
