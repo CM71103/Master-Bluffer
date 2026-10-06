@@ -60,6 +60,13 @@ async function saveRoom(room) {
 }
 
 /** game = { roomCode, winner, imposterName, teamWord, imposterWord, players:[{uid,name,wasImposter,won}] } */
+async function deleteRoom(code) {
+  if (!db) return;
+  try {
+    await db.collection('rooms').deleteOne({ code });
+  } catch (e) { console.log('deleteRoom failed:', e.message); }
+}
+
 async function saveGame(game) {
   if (!db) return;
   try {
@@ -126,6 +133,6 @@ async function recentGames() {
 }
 
 module.exports = {
-  connect, isConnected, randomWordPair, saveRoom, saveGame,
+  connect, isConnected, randomWordPair, saveRoom, deleteRoom, saveGame,
   history, deleteGame, leaderboard, recentGames,
 };

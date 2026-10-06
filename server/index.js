@@ -137,6 +137,7 @@ io.on('connection',(socket)=>{
 
     // here we listen to an event as it is server side, the event here is create_room and as soon as the event happens Socket.io calls the callback which creates a room ,which is a js object about game room
   socket.on('create_room',async({playerName,uid})=>{
+    if(getRoomBySocket(socket.id)) return socket.emit('error',{message:'Leave your current room before creating another'});
     const code = genCode();
     const pair = await mongo.randomWordPair();
     const room = {
@@ -164,10 +165,16 @@ io.on('connection',(socket)=>{
    });
   
    socket.on('join_room',({roomId,playerName,uid})=>{
-    const room = rooms.get(roomId.toUpperCase());
+    if(getRoomBySocket(socket.id)) return socket.emit('error',{message:'You are already in a room'});
+    const room = rooms.get(String(roomId || '').toUpperCase());
     if(!room) return socket.emit('error',{message:'Room not found'});
-    if(room.players.length>=10) return socket.emit("error",{message:'Room already full'});
     if(room.phase!='lobby') return socket.emit('error',{message:'Game Already started'});
+    // UID is currently provided by the client and is NOT verified by Firebase Admin.
+    // Use it only to prevent accidental duplicate seats, never as an authorization check.
+    if(uid && room.players.some(p=>p.uid === uid)) {
+      return socket.emit('error',{message:'This account is already in this room'});
+    }
+    if(room.players.length>=10) return socket.emit("error",{message:'Room already full'});
     room.players.push({id:socket.id,uid:uid||null,name:playerName,isReady:false});
     socket.join(room.code);
     socket.emit('room_joined',room);
@@ -179,7 +186,7 @@ io.on('connection',(socket)=>{
       if(!room.players.some(p=>p.id==socket.id)) continue;
       room.players = room.players.filter(p=>p.id != socket.id);
       socket.leave(code);
-      if(room.players.length===0){ clearInterval(room.timerInterval); rooms.delete(code); }
+      if(room.players.length===0){ clearInterval(room.timerInterval); rooms.delete(code); mongo.deleteRoom(code); }
       else{
         if(room.hostId==socket.id) room.hostId=room.players[0].id;
         io.to(code).emit('players_updated',room.players);
@@ -244,7 +251,7 @@ io.on('connection',(socket)=>{
     console.log('disconnected',socket.id);
     for(const [code,room] of rooms){
       room.players = room.players.filter(p=>p.id != socket.id);
-      if(room.players.length===0) rooms.delete(code);
+      if(room.players.length===0) { rooms.delete(code); mongo.deleteRoom(code); }
       else io.to(code).emit('players_updated',room.players);
     }
   });

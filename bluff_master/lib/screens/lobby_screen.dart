@@ -108,7 +108,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
       code: code,
       playerName: _playerName,
       isHost: isHost,
-      playerCount: _players.length,
     );
     NotificationService.instance.show(
       isHost ? 'Room created' : 'Room joined',
@@ -129,7 +128,12 @@ class _LobbyScreenState extends State<LobbyScreen> {
             _detail('Role', isHost ? 'Host' : 'Player'),
             _detail('Playing as', _playerName),
             _detail('Players in room', '${_players.length}'),
-            _detail('Saved to cloud', saved ? 'Yes' : 'No (check Firestore rules)'),
+            _detail('Saved to cloud', saved ? 'Yes' : 'No'),
+            if (!saved)
+              Text(
+                FirestoreService.instance.lastRoomSaveError ?? 'Unknown save error',
+                style: const TextStyle(color: Colors.orangeAccent),
+              ),
           ],
         ),
         actions: [
@@ -176,7 +180,11 @@ class _LobbyScreenState extends State<LobbyScreen> {
   @override
   void dispose() {
     // Leaving the lobby screen means leaving the room.
-    if (_joined) _socket.leaveRoom();
+    if (_joined) {
+      final code = _socket.roomCode;
+      if (code != null) FirestoreService.instance.leaveRoom(code);
+      _socket.leaveRoom();
+    }
     _codeController.dispose();
     super.dispose();
   }

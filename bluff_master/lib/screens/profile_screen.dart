@@ -38,6 +38,17 @@ class ProfileScreen extends StatelessWidget {
               StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                 stream: fs.statsStream(),
                 builder: (context, snap) {
+                  if (snap.hasError) {
+                    return const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text('Could not load stats. Check Firestore access.'),
+                      ),
+                    );
+                  }
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
                   final d = snap.data?.data() ?? {};
                   final played = (d['gamesPlayed'] ?? 0) as int;
                   final wins = (d['wins'] ?? 0) as int;
@@ -99,8 +110,7 @@ class ProfileScreen extends StatelessWidget {
                             color: Colors.red.shade800,
                             child: const Icon(Icons.delete, color: Colors.white),
                           ),
-                          onDismissed: (_) => fs.deleteGame(doc.id,
-                              won: won, wasImposter: wasImp),
+                          onDismissed: (_) => fs.deleteGame(doc.id),
                           child: Card(
                             child: ListTile(
                               leading: Icon(
@@ -116,8 +126,7 @@ class ProfileScreen extends StatelessWidget {
                               isThreeLine: ts != null,
                               trailing: IconButton(
                                 icon: const Icon(Icons.delete_outline, color: Colors.grey),
-                                onPressed: () => fs.deleteGame(doc.id,
-                                    won: won, wasImposter: wasImp),
+                                onPressed: () => fs.deleteGame(doc.id),
                               ),
                             ),
                           ),

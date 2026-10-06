@@ -127,7 +127,9 @@ class _GameScreenState extends State<GameScreen>{
       imposterName: (data['imposterName'] ?? '').toString(),
       teamWord: (data['teamWord'] ?? '').toString(),
       imposterWord: (data['imposterWord'] ?? '').toString(),
-    );
+    ).catchError((Object error) {
+      debugPrint('Could not save game history to Firestore: $error');
+    });
     NotificationService.instance.show(
       won ? 'You won!' : 'You lost',
       teamWon ? 'The team caught the imposter.' : 'The imposter got away.',
