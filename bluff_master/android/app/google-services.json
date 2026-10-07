@@ -12,7 +12,20 @@
           "package_name": "com.example.bluff_master"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "883473585633-vgucq1ll99ocbe4pige8k7atns1ptedv.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.bluff_master",
+            "certificate_hash": "08912afc0d26c874e11a6371d8bed1b624384c13"
+          }
+        },
+        {
+          "client_id": "883473585633-6keu98g7hsb9cm1qeqvl76puf12gl423.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyCad0vSVRLsRSP8_-dJjItSmBOW4gdWFsQ"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "883473585633-6keu98g7hsb9cm1qeqvl76puf12gl423.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "883473585633-l3c0cb32gmnn7ms52ei4qrmb11u8v5vo.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.bluffMaster"
+              }
+            }
+          ]
         }
       }
     }

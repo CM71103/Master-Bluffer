@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import '../theme.dart';
@@ -14,9 +15,9 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final GoogleSignIn _googleAuth = GoogleSignIn(
-      clientId:
-          '883473585633-6keu98g7hsb9cm1qeqvl76puf12gl423.apps.googleusercontent.com');
+  // On Android the Google Services plugin supplies the OAuth client from
+  // google-services.json. Web uses Firebase Auth's popup flow directly.
+  final GoogleSignIn _googleAuth = GoogleSignIn();
 
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
@@ -58,10 +59,16 @@ class _LoginScreenState extends State<LoginScreen> {
           return 'No internet connection.';
         case 'operation-not-allowed':
           return 'This sign-in method is not enabled in Firebase.';
+        case 'unauthorized-domain':
+          return 'This website is not authorized for Firebase sign-in. Add its hostname in Firebase Authentication > Settings > Authorized domains.';
+        case 'popup-blocked':
+          return 'Allow pop-ups for this website and try Google sign-in again.';
+        case 'popup-closed-by-user':
+          return 'Google sign-in was cancelled.';
       }
       return e.message ?? 'Authentication failed.';
     }
-    return 'Something went wrong. Please try again.';
+    return 'Google sign-in failed: $e';
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -98,6 +105,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   void _signInWithGoogle() {
     _run(() async {
+      if (kIsWeb) {
+        await _auth.signInWithPopup(GoogleAuthProvider());
+        return;
+      }
       final googleUser = await _googleAuth.signIn();
       if (googleUser == null) return; // user cancelled
       final googleAuth = await googleUser.authentication;

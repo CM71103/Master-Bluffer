@@ -35,12 +35,12 @@ class SocketService{
     }
 
     _socket = IO.io(serverUrl, <String, dynamic>{
-      // Flutter's dart:io socket client connects directly over WebSocket.
+      // Web and mobile both use WebSocket for the game connection.
       'transports': ['websocket'],
       'autoConnect': false,
       'forceNew': true,
       'reconnection': true,
-      'timeout': 10000,
+      'timeout': 30000,
     });
     // this creates the socket instance with backend url as serverUrl, here transports tell how to connect to server
     // i)polling: Client sends http req again and again every few secs for new data ,slow more usage 
@@ -58,7 +58,7 @@ class SocketService{
     _socket!.connect();
   }
 
-  Future<bool> waitForConnection({Duration timeout = const Duration(seconds: 20)}) async {
+  Future<bool> waitForConnection({Duration timeout = const Duration(seconds: 60)}) async {
     connect();
     if (isConnected) return true;
     final socket = _socket!;
