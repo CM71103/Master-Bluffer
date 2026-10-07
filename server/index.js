@@ -21,21 +21,19 @@ app.delete('/api/history/:id/:uid',safe(async(req)=>({ok:await mongo.deleteGame(
 const server = http.createServer(app);
 const io = new Server(server,{cors:{origin:"*"}});
 
-
-const WORD_PAIRS = [
-  ["Pizza","Oven"],["Dog","Cat"],["Sun","Moon"],
-  ["Coffee","Tea"],["Beach","Pool"],["Car","Bike"],
-  ["Book","Pen"],["Ice","Snow"],["Bird","Fish"],
-  ["King","Queen"],["Gold","Silver"],["Fire","Smoke"],
-];
+const MIN_PLAYERS = 3;          // players needed to start a game
+const CLUE_SECONDS = 60;
+const VOTE_SECONDS = 60;
+const EARLY_END_SECONDS = 5;    // when everyone has answered, only this much time is left
+const RESULT_SECONDS = 8;       // how long round results stay on screen
 
 
 const rooms = new Map();
 
 function genCode(){
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  let c = ''; 
-  for (let i=0;i<6;i++) 
+  let c = '';
+  for (let i=0;i<6;i++)
     c+=chars[Math.floor(Math.random()*chars.length)];
   return rooms.has(c) ? genCode():c;
 }
@@ -47,39 +45,106 @@ function getRoomBySocket(socketId){
   return null;
 }
 
+// What clients may see about a room. The room object itself holds timers and
+// the secret words, so it must never be sent as it is.
+function publicRoom(room){
+  return {
+    id:room.id,
+    code:room.code,
+    hostId:room.hostId,
+    players:room.players,
+    phase:room.phase,
+    totalRounds:room.totalRounds,
+    currentRound:room.currentRound,
+  };
+}
+
+function stopTimer(room){
+  clearInterval(room.timerInterval);
+  room.timerInterval = null;
+}
+
+const isLive = (room)=> rooms.get(room.id)===room;
+
+// Starts a new round: new word pair, new imposter, roles sent privately.
+async function beginRound(room){
+  if(!isLive(room)) return;
+  if(room.players.length < MIN_PLAYERS){
+    // too many players left to continue - finish the game with current scores
+    return finishGame(room);
+  }
+  const pair = await mongo.randomWordPair();
+  if(!isLive(room)) return;
+  room.teamWord = pair[0];
+  room.imposterWord = pair[1];
+  room.clues = [];
+  room.votes = {};
+  room.players.forEach(p=>{ delete p.hasGivenClue; });
+  const idx = Math.floor(Math.random()*room.players.length);
+  room.imposterId = room.players[idx].id;
+  room.phase = 'word-reveal';
+  room.players.forEach(p=>{
+    const isImp = p.id==room.imposterId;
+    io.to(p.id).emit('role_assigned',{isImposter:isImp,word:isImp?room.imposterWord:room.teamWord});
+  });
+  io.to(room.id).emit('phase_change',{
+    phase:'word-reveal',timer:5,
+    currentRound:room.currentRound,totalRounds:room.totalRounds,
+  });
+  setTimeout(()=>{ if(isLive(room) && room.phase==='word-reveal') startCluePhase(room); },5000);
+}
+
 function startCluePhase(room){
+  stopTimer(room);
   room.phase='clue';
   room.clues=[];
-  room.timer=60;
+  room.cluesEarlyEnd=false;
+  room.timer=CLUE_SECONDS;
   io.to(room.id).emit('phase_change',{phase:'clue',timer:room.timer});
   room.timerInterval = setInterval(()=>{
     room.timer--;
     io.to(room.id).emit('timer_tick',room.timer);
-    if(room.timer<=0){
-      clearInterval(room.timerInterval);
-      startVotingPhase(room);
-    }
+    if(room.timer<=0) startVotingPhase(room);
   },1000);
 }
 
+// Everyone has given a clue -> cut the remaining clue time down to 5 seconds.
+function checkCluesComplete(room){
+  if(room.phase!=='clue' || room.cluesEarlyEnd) return;
+  if(room.players.length>0 && room.players.every(p=>p.hasGivenClue)){
+    room.cluesEarlyEnd=true;
+    if(room.timer>EARLY_END_SECONDS){
+      room.timer=EARLY_END_SECONDS;
+      io.to(room.id).emit('timer_tick',room.timer);
+    }
+  }
+}
+
 function startVotingPhase(room){
+  if(room.phase!=='clue') return;
+  stopTimer(room);
   room.phase='voting';
   room.votes={};
-  room.timer=60;
+  room.timer=VOTE_SECONDS;
   io.to(room.id).emit('phase_change',{phase:'voting',timer:room.timer});
   io.to(room.id).emit('players_updated',room.players);
   room.timerInterval = setInterval(()=>{
     room.timer--;
     io.to(room.id).emit('timer_tick',room.timer);
-    if(room.timer<=0){
-      clearInterval(room.timerInterval);
-      endRound(room);
-    }
+    if(room.timer<=0) endRound(room);
   },1000);
 }
 
+// Everyone voted -> show the result immediately.
+function checkVotesComplete(room){
+  if(room.phase!=='voting') return;
+  const cast = room.players.filter(p=>room.votes[p.id]).length;
+  if(room.players.length>0 && cast>=room.players.length) endRound(room);
+}
+
 function endRound(room){
-  clearInterval(room.timerInterval);
+  if(room.phase!=='voting') return;   // guards against a double call (last vote + timer)
+  stopTimer(room);
   room.phase='results';
   const voteCounts={};
   room.players.forEach(p=>voteCounts[p.id]=0);
@@ -99,6 +164,8 @@ function endRound(room){
     const won = wasImposter ? winner=='imposter' : winner=='team';
     if(won) room.scores[p.id] = (room.scores[p.id]||0) + 1;
   });
+  const finishedRound = room.currentRound;
+  const isLastRound = finishedRound >= room.totalRounds;
   io.to(room.id).emit('round_results',{
     imposterId:room.imposterId,
     imposterName:room.players.find(p=>p.id==room.imposterId)?.name,
@@ -107,6 +174,9 @@ function endRound(room){
     voteCounts,winner,
     teamWord:room.teamWord,
     imposterWord:room.imposterWord,
+    round:finishedRound,
+    totalRounds:room.totalRounds,
+    isLastRound,
   });
   mongo.saveGame({
     roomCode:room.code,
@@ -114,38 +184,65 @@ function endRound(room){
     imposterName:room.players.find(p=>p.id==room.imposterId)?.name,
     teamWord:room.teamWord,
     imposterWord:room.imposterWord,
-    round:room.currentRound,
+    round:finishedRound,
     totalRounds:room.totalRounds,
     players:room.players.map(p=>{
       const wasImposter = p.id==room.imposterId;
       return {uid:p.uid,name:p.name,wasImposter,won:wasImposter?winner=='imposter':winner=='team'};
     }),
   });
-  room.currentRound++;
-  if(room.currentRound > room.totalRounds){
-    const finalScores = room.players.map(p=>({
-      name:p.name,
-      score:room.scores[p.id]||0,
-    })).sort((a,b)=>b.score-a.score);
-    io.to(room.id).emit('game_over',{scores:finalScores});
-    setTimeout(()=>resetToLobby(room),15000);
+  if(isLastRound){
+    setTimeout(()=>{ if(isLive(room) && room.phase==='results') finishGame(room); },RESULT_SECONDS*1000);
   } else {
-    setTimeout(()=>resetToLobby(room),10000);
+    room.currentRound++;
+    // next round starts by itself - nobody has to return to the lobby
+    setTimeout(()=>{ if(isLive(room) && room.phase==='results') beginRound(room); },RESULT_SECONDS*1000);
   }
 }
 
-async function resetToLobby(room){
+function finishGame(room){
+  stopTimer(room);
+  room.phase='game-over';
+  const finalScores = room.players.map(p=>({
+    name:p.name,
+    score:room.scores[p.id]||0,
+  })).sort((a,b)=>b.score-a.score);
+  io.to(room.id).emit('game_over',{scores:finalScores});
+  setTimeout(()=>{ if(isLive(room)) resetToLobby(room); },15000);
+}
+
+function resetToLobby(room){
+  stopTimer(room);
   room.phase='lobby';
   room.votes={};
   room.clues=[];
   room.imposterId=null;
-  room.players.forEach(p=>{p.isReady=false;delete p.hasGivenClue;});
+  room.scores={};
   room.currentRound = 1;
-  const pair=await mongo.randomWordPair();
-  room.teamWord=pair[0];
-  room.imposterWord=pair[1];
-  io.to(room.id).emit('room_reset',room);
+  room.players.forEach(p=>{p.isReady=false;delete p.hasGivenClue;});
+  io.to(room.id).emit('room_reset',publicRoom(room));
   io.to(room.id).emit('players_updated',room.players);
+}
+
+// Removes a player from whatever room they are in and keeps that room consistent.
+function removePlayer(socket){
+  for(const [code,room] of rooms){
+    if(!room.players.some(p=>p.id==socket.id)) continue;
+    room.players = room.players.filter(p=>p.id != socket.id);
+    socket.leave(code);
+    if(room.players.length===0){
+      stopTimer(room); rooms.delete(code); mongo.deleteRoom(code);
+      continue;
+    }
+    if(room.hostId==socket.id){
+      room.hostId=room.players[0].id;
+      io.to(code).emit('host_changed',{hostId:room.hostId});
+    }
+    io.to(code).emit('players_updated',room.players);
+    // the leaver may have been the only one we were waiting for
+    checkCluesComplete(room);
+    checkVotesComplete(room);
+  }
 }
 
 // Think of this as: "every time a new phone opens the app, run this block for them". Everything inside is per-client — the socket variable is that one phone's private line, and socket.id is its unique ID. All the socket.on(...) handlers below register what that client can ask the server to do.
@@ -177,15 +274,15 @@ io.on('connection',(socket)=>{
     rooms.set(code,room);
     mongo.saveRoom(room);
     // as rooms is a Map it stores the code:room as a key value pair
-    socket.join(code), 
+    socket.join(code),
     // After socket.join(code), that socket belongs to the Socket.IO room identified by that code.
-    io.to(code).emit('room_created',room);
+    io.to(code).emit('room_created',publicRoom(room));
     // it broadcasts the 'room_created' event and its room data exclusively to all sockets(users) that have joined the room named code
     // here io.to(code) creates a virtual channel so when brodacasted it doesn't go out and interfer with other channels
 
-    console.log('room created',code);
+    console.log('room created',code,'rounds',totalRounds);
    });
-  
+
    socket.on('join_room',({roomId,playerName,uid})=>{
     if(getRoomBySocket(socket.id)) return socket.emit('error',{message:'You are already in a room'});
     const room = rooms.get(String(roomId || '').toUpperCase());
@@ -199,23 +296,11 @@ io.on('connection',(socket)=>{
     if(room.players.length>=10) return socket.emit("error",{message:'Room already full'});
     room.players.push({id:socket.id,uid:uid||null,name:playerName,isReady:false});
     socket.join(room.code);
-    socket.emit('room_joined',room);
+    socket.emit('room_joined',publicRoom(room));
     io.to(room.code).emit('players_updated',room.players);
    });
 
-  socket.on('leave_room',()=>{
-    for(const [code,room] of rooms){
-      if(!room.players.some(p=>p.id==socket.id)) continue;
-      room.players = room.players.filter(p=>p.id != socket.id);
-      socket.leave(code);
-      if(room.players.length===0){ clearInterval(room.timerInterval); rooms.delete(code); mongo.deleteRoom(code); }
-      else{
-        if(room.hostId==socket.id) room.hostId=room.players[0].id;
-        io.to(code).emit('players_updated',room.players);
-        io.to(code).emit('host_changed',{hostId:room.hostId});
-      }
-    }
-  });
+  socket.on('leave_room',()=>removePlayer(socket));
 
   socket.on('toggle_ready',()=>{
     const room = getRoomBySocket(socket.id);
@@ -231,17 +316,11 @@ io.on('connection',(socket)=>{
   socket.on('start_game',()=>{
     const room = getRoomBySocket(socket.id);
     if(!room || room.hostId != socket.id) return;
-    if(room.players.length<2) return socket.emit('error',{message:'Need at least 2 players'});
-    if(room.currentRound > room.totalRounds) return socket.emit('error',{message:'All rounds completed'});
-
-    const idx = Math.floor(Math.random()*room.players.length);
-    room.imposterId = room.players[idx].id;
-    room.players.forEach(p=>{
-      const isImp=p.id==room.imposterId;
-      io.to(p.id).emit('role_assigned',{isImposter:isImp,word:isImp?room.imposterWord : room.teamWord});
-    });
-    io.to(room.id).emit('phase_change',{phase:'word-reveal',timer:5});
-    setTimeout(()=>startCluePhase(room),5000);
+    if(room.phase!=='lobby') return;
+    if(room.players.length<MIN_PLAYERS) return socket.emit('error',{message:`Need at least ${MIN_PLAYERS} players`});
+    room.currentRound = 1;
+    room.scores = {};
+    beginRound(room);
   });
 
   socket.on('submit_clue',({clue,playerName})=>{
@@ -252,6 +331,7 @@ io.on('connection',(socket)=>{
     player.hasGivenClue=true;
     room.clues.push({playerId:socket.id,playerName,clue});
     io.to(room.id).emit('clue_submitted',room.clues);
+    checkCluesComplete(room);
   })
 
   socket.on('submit_vote',({votedPlayerId})=>{
@@ -259,24 +339,20 @@ io.on('connection',(socket)=>{
     if(!room||room.phase!=='voting') return;
     if(room.votes[socket.id]) return;
     room.votes[socket.id]=votedPlayerId;
-    io.to(room.id).emit('votes_updated',{
-      votesCast:Object.keys(room.votes).length,
+    // Only the voter is told "you have voted". (It used to be sent to the whole
+    // room, which locked every other player out after the first vote.)
+    socket.emit('votes_updated',{
+      votesCast:room.players.filter(p=>room.votes[p.id]).length,
       totalPlayers:room.players.length,
       hasVoted:true,
     });
-    if(Object.keys(room.votes).length===room.players.length){
-      endRound(room);
-    }
+    checkVotesComplete(room);
   });
 
 
   socket.on('disconnect',()=>{
     console.log('disconnected',socket.id);
-    for(const [code,room] of rooms){
-      room.players = room.players.filter(p=>p.id != socket.id);
-      if(room.players.length===0) { rooms.delete(code); mongo.deleteRoom(code); }
-      else io.to(code).emit('players_updated',room.players);
-    }
+    removePlayer(socket);
   });
 
 

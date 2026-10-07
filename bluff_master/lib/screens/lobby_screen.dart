@@ -389,11 +389,18 @@ class _LobbyScreenState extends State<LobbyScreen> {
                         label: Text(_iAmReady ? 'Not Ready' : "I'm Ready"),
                         onPressed: _toggleReady,
                       ),
+                      if (_players.length < 3)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                              'At least 3 players are needed to start (${_players.length}/3)',
+                              style: const TextStyle(color: Colors.amber)),
+                        ),
                       if (_isHost)
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: ElevatedButton(
-                            onPressed: _players.length >= 2 ? _startGame : null,
+                            onPressed: _players.length >= 3 ? _startGame : null,
                             child: const Text('Start Game',
                                 style: TextStyle(fontSize: 18)),
                           ),
