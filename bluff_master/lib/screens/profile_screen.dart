@@ -22,10 +22,9 @@ class ProfileScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Profile & Stats')),
       body: ResponsiveBody(
-        child: Padding(
+        child: ListView(
           padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
+          children: [
               const CircleAvatar(
                   radius: 36,
                   backgroundColor: kPrimary,
@@ -75,8 +74,7 @@ class ProfileScreen extends StatelessWidget {
                         fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
               ),
               const SizedBox(height: 8),
-              Expanded(
-                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: fs.historyStream(),
                   builder: (context, snap) {
                     if (snap.hasError) {
@@ -93,9 +91,8 @@ class ProfileScreen extends StatelessWidget {
                           child: Text('No games yet. Go play one!',
                               style: TextStyle(color: Colors.grey)));
                     }
-                    return ListView.builder(
-                      itemCount: docs.length,
-                      itemBuilder: (context, i) {
+                    return Column(
+                      children: List.generate(docs.length, (i) {
                         final doc = docs[i];
                         final g = doc.data();
                         final won = g['won'] == true;
@@ -131,13 +128,11 @@ class ProfileScreen extends StatelessWidget {
                             ),
                           ),
                         );
-                      },
+                      }),
                     );
                   },
                 ),
-              ),
-            ],
-          ),
+          ],
         ),
       ),
     );

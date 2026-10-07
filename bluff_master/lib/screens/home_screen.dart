@@ -40,9 +40,14 @@ class HomeScreen extends StatelessWidget {
         ],
       ),
       body: ResponsiveBody(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Icon(Icons.theater_comedy, size: 90, color: kPrimary),
@@ -73,6 +78,9 @@ class HomeScreen extends StatelessWidget {
                 onPressed: () => Navigator.pushNamed(context, '/leaderboard'),
               ),
             ],
+                ),
+              ),
+            ),
           ),
         ),
       ),

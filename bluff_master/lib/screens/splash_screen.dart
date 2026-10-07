@@ -35,8 +35,10 @@ class _SplashScreenState extends State<SplashScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kBg,
-      body: Center(
-        child: FadeTransition(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          child: Center(
+            child: FadeTransition(
           opacity: _anim,
           child: ScaleTransition(
             scale: Tween<double>(begin: 0.7, end: 1).animate(
@@ -63,6 +65,8 @@ class _SplashScreenState extends State<SplashScreen>
                     height: 28,
                     child: CircularProgressIndicator(strokeWidth: 3)),
               ],
+            ),
+          ),
             ),
           ),
         ),

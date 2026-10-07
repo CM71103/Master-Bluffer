@@ -63,14 +63,21 @@ class _GameScreenState extends State<GameScreen>{
       setState((){
         _phase = data['phase'];
         if(data['timer']!=null) _timer = data['timer'];
-        if(data['phase']=='clue') _clueController.clear();
+        if(data['phase']=='clue') {
+          _clueController.clear();
+          _clues = [];
+          _hasClued = false;
+        }
         if(data['phase']=='voting') _hasVoted = false;
       });
     });
 
     _socket.onClueSubmitted((data){
       if(!mounted) return;
-      setState(()=>_clues=data);
+      setState(() {
+        _clues = data;
+        _hasClued = data.any((clue) => clue['playerId'] == _socket.playerId);
+      });
       });
 
     _socket.onTimerTick((data){
@@ -139,7 +146,7 @@ class _GameScreenState extends State<GameScreen>{
   void _submitClue(){
     final clue = _clueController.text.trim();
     if(clue.isEmpty || _hasClued) return;
-    _hasClued = true;
+    setState(() => _hasClued = true);
     _socket.submitClue(clue,_playerName);
     _clueController.clear();
   }
@@ -180,8 +187,8 @@ class _GameScreenState extends State<GameScreen>{
   }
 
   Widget _buildWordReveal(){
-    return Center(
-      child:Column(
+    return _scrollableCentered(
+      Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children:[
           Icon(
@@ -236,14 +243,55 @@ class _GameScreenState extends State<GameScreen>{
   }
 
   Widget _buildCluePhase(){
-    return Column(
+    return ListView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       children:[
         _buildTimerBar(),
-        Expanded(
-          child:ListView.builder(
-            padding:EdgeInsets.all(16),
-            itemCount:_clues.length,
-            itemBuilder:(context,index){
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _clueController,
+                  enabled: !_hasClued,
+                  style: const TextStyle(color: Colors.white),
+                  textInputAction: TextInputAction.send,
+                  decoration: InputDecoration(
+                    hintText: _hasClued ? 'Clue sent!' : 'Type one word clue...',
+                  ),
+                  onSubmitted: (_) => _submitClue(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 76,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(minimumSize: const Size(0, 50)),
+                  onPressed: _hasClued ? null : _submitClue,
+                  child: const Text('Send'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: Text('Room clues • visible to everyone in this game',
+              style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+        ),
+        if (_clues.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('No clues yet. Be the first to send one!',
+                style: TextStyle(color: Colors.white54)),
+          ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: List.generate(_clues.length, (index) {
               final clue = _clues[index];
               final isMe = clue['playerId'] == _socket.playerId;
               return Card(
@@ -269,42 +317,15 @@ class _GameScreenState extends State<GameScreen>{
                   ),
                 ),
               );
-            },
+            }),
           ),
         ),
-        Padding(
-          padding:EdgeInsets.all(16),
-          child:Row(
-            children:[
-              Expanded(
-                child:TextField(
-                  controller:_clueController,
-                  enabled:!_hasClued,
-                  style:TextStyle(color:Colors.white),
-                  decoration:InputDecoration(
-                    hintText:_hasClued ? 'Clue sent!' : 'Type one word clue...',
-                    hintStyle:TextStyle(color:Colors.grey),
-                    filled:true,
-                    fillColor:Colors.grey.shade800,
-                    border:OutlineInputBorder(borderRadius:BorderRadius.circular(12),borderSide:BorderSide.none),
-                  ),
-                  onSubmitted:(_)=>_submitClue(),
-                ),
-              ),
-              SizedBox(width:8),
-              ElevatedButton(
-                onPressed:_hasClued?null:_submitClue,
-                child:Text("Send"),
-              )
-            ]
-          )
-        )
       ],
     );
   }
 
   Widget _buildVoting(){
-    return Column(
+    return ListView(
       children:[
         _buildTimerBar(),
         Padding(
@@ -325,11 +346,10 @@ class _GameScreenState extends State<GameScreen>{
             ),
           ),
         ),
-        Expanded(
-          child:ListView.builder(
-            padding:EdgeInsets.all(16),
-            itemCount:_players.length,
-            itemBuilder:(context,index){
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: List.generate(_players.length, (index) {
               final player = _players[index];
               final isMe = player['id'] ==_socket.playerId;
               return Card(
@@ -355,7 +375,7 @@ class _GameScreenState extends State<GameScreen>{
                   }
                 ),
               );
-            }
+            }),
           )
         )
       ],
@@ -367,8 +387,8 @@ class _GameScreenState extends State<GameScreen>{
     final winner = _result?['winner'];
     final imposterName = _result?['imposterName'];
     final teamWon = winner=='team';
-    return Center(
-      child:Column(
+    return _scrollableCentered(
+      Column(
         mainAxisAlignment:MainAxisAlignment.center,
         children:[
           Icon(
@@ -431,6 +451,22 @@ class _GameScreenState extends State<GameScreen>{
           ),
         ]
       )
+    );
+  }
+
+  Widget _scrollableCentered(Widget child) {
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: child,
+            ),
+          ),
+        ),
+      ),
     );
   }
 

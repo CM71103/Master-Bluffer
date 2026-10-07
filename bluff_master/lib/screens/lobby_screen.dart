@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -23,6 +25,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
   bool _joined = false;
   bool _connecting = false;
   String? _error;
+  Timer? _roomRequestTimer;
 
   String get _playerName {
     final user = FirebaseAuth.instance.currentUser;
@@ -41,12 +44,14 @@ class _LobbyScreenState extends State<LobbyScreen> {
   void _setupListeners() {
     _socket.onRoomCreated((data) {
       if (!mounted) return;
+      _roomRequestTimer?.cancel();
       setState(() {
         _roomCode = data['code'] as String;
         _isHost = true;
         _joined = true;
         _players = (data['players'] as List).toList();
         _error = null;
+        _connecting = false;
       });
       _socket.roomCode = _roomCode;
       _confirmRoom(isHost: true);
@@ -54,12 +59,14 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
     _socket.onRoomJoined((data) {
       if (!mounted) return;
+      _roomRequestTimer?.cancel();
       setState(() {
         _roomCode = data['code'] as String;
         _isHost = data['hostId'] == _socket.playerId;
         _joined = true;
         _players = (data['players'] as List).toList();
         _error = null;
+        _connecting = false;
       });
       _socket.roomCode = _roomCode;
       _confirmRoom(isHost: false);
@@ -77,7 +84,11 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
     _socket.onError((data) {
       if (!mounted) return;
-      setState(() => _error = (data['message'] as String?) ?? 'Something went wrong');
+      _roomRequestTimer?.cancel();
+      setState(() {
+        _connecting = false;
+        _error = (data['message'] as String?) ?? 'Something went wrong';
+      });
     });
 
     // The server sends the role just before the phase change, so listen for it
@@ -161,6 +172,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
   Future<void> _createRoom() async {
     if (!await _connectForRoom()) return;
+    _beginRoomRequest('Creating room...');
     _socket.createRoom(_playerName, uid: FirebaseAuth.instance.currentUser?.uid);
   }
 
@@ -171,7 +183,21 @@ class _LobbyScreenState extends State<LobbyScreen> {
       return;
     }
     if (!await _connectForRoom()) return;
+    _beginRoomRequest('Joining room...');
     _socket.joinRoom(code, _playerName, uid: FirebaseAuth.instance.currentUser?.uid);
+  }
+
+  void _beginRoomRequest(String status) {
+    setState(() => _error = status);
+    _roomRequestTimer?.cancel();
+    _roomRequestTimer = Timer(const Duration(seconds: 20), () {
+      if (!mounted || !_connecting) return;
+      setState(() {
+        _connecting = false;
+        _error = 'The server did not confirm the room within 20 seconds. '
+            'Please try again.';
+      });
+    });
   }
 
   Future<bool> _connectForRoom() async {
@@ -183,7 +209,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
     final connected = await _socket.waitForConnection();
     if (!mounted) return false;
     setState(() {
-      _connecting = false;
+      _connecting = connected;
       _error = connected
           ? null
           : 'Cannot reach game server: ${_socket.lastConnectionError ?? 'connection timed out'}. Check internet and try again.';
@@ -197,6 +223,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
   @override
   void dispose() {
+    _roomRequestTimer?.cancel();
     // Leaving the lobby screen means leaving the room.
     if (_joined) {
       final code = _socket.roomCode;
@@ -225,10 +252,10 @@ class _LobbyScreenState extends State<LobbyScreen> {
         ],
       ),
       body: ResponsiveBody(
-        child: Padding(
+        child: ListView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
+          children: [
               if (!_joined)
                 Card(
                   child: Padding(
@@ -273,8 +300,9 @@ class _LobbyScreenState extends State<LobbyScreen> {
                         if (_error != null)
                           Padding(
                             padding: const EdgeInsets.only(top: 8),
-                            child: Text(_error!,
-                                style: const TextStyle(color: Colors.redAccent)),
+                             child: Text(_error!,
+                                 style: TextStyle(color: _connecting
+                                     ? Colors.white70 : Colors.redAccent)),
                           ),
                       ],
                     ),
@@ -317,10 +345,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: _players.length,
-                    itemBuilder: (context, index) {
+                ...List.generate(_players.length, (index) {
                       final player = _players[index];
                       final isMe = player['id'] == _socket.playerId;
                       final isReady = player['isReady'] == true;
@@ -338,9 +363,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
                                   color: isReady ? Colors.green : Colors.grey)),
                         ),
                       );
-                    },
-                  ),
-                ),
+                    }),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16, top: 8),
                   child: Column(
@@ -375,8 +398,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
                   ),
                 ),
               ],
-            ],
-          ),
+          ],
         ),
       ),
     );

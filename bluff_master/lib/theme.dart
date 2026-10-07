@@ -59,10 +59,13 @@ class ResponsiveBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        child: child,
+    return LayoutBuilder(
+      builder: (context, constraints) => Center(
+        child: SizedBox(
+          width: constraints.maxWidth.clamp(0.0, maxWidth),
+          height: constraints.maxHeight,
+          child: child,
+        ),
       ),
     );
   }
