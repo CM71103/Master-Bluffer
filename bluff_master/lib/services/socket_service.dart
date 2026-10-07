@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../config.dart';
 
@@ -8,6 +10,7 @@ class SocketService{
   static final SocketService instance =  SocketService._internal();
 
   IO.Socket? _socket;
+  String? lastConnectionError;
 
   bool get isConnected => _socket?.connected ?? false;
   String? get playerId => _socket?.id;
@@ -24,21 +27,58 @@ class SocketService{
   List<dynamic>? get currentPlayers => _currentPlayers;
 
   void connect(){
-    if(isConnected) return;
+    // Reuse the socket while a connection is pending: replacing it here loses
+    // the lobby's event listeners and leaves the old socket reconnecting.
+    if (_socket != null) {
+      if (!isConnected) _socket!.connect();
+      return;
+    }
 
-    _socket = IO.io(serverUrl,<String,dynamic>{
-      'transports':['polling','websocket'],
+    _socket = IO.io(serverUrl, <String, dynamic>{
+      // Flutter's dart:io socket client connects directly over WebSocket.
+      'transports': ['websocket'],
+      'autoConnect': false,
+      'forceNew': true,
+      'reconnection': true,
+      'timeout': 10000,
     });
     // this creates the socket instance with backend url as serverUrl, here transports tell how to connect to server
     // i)polling: Client sends http req again and again every few secs for new data ,slow more usage 
     // ii) websocket - one single permanent connection stays open . server can push data instantly
 
-    _socket!.onConnect((_)=>print('Socket connected: ${_socket!.id}'));
+    _socket!.onConnect((_) {
+      lastConnectionError = null;
+      print('Socket connected: ${_socket!.id}');
+    });
     _socket!.onDisconnect((_)=>print('Socket disconnected'));
-    _socket!.on('connect_error',(data)=>print('Connect error: $data'));
+    _socket!.onConnectError((data) {
+      lastConnectionError = data.toString();
+      print('Connect error: $data');
+    });
+    _socket!.connect();
   }
 
-  void disconnect()=>_socket?.disconnect();
+  Future<bool> waitForConnection({Duration timeout = const Duration(seconds: 20)}) async {
+    connect();
+    if (isConnected) return true;
+    final socket = _socket!;
+    final result = Completer<bool>();
+    void connected(dynamic _) {
+      if (!result.isCompleted) result.complete(true);
+    }
+    socket.onConnect(connected);
+    try {
+      return await result.future.timeout(timeout, onTimeout: () => isConnected);
+    } finally {
+      socket.off('connect', connected);
+    }
+  }
+
+  void disconnect(){
+    _socket?.dispose();
+    _socket = null;
+    lastConnectionError = null;
+  }
   
   //client->server Actions
   

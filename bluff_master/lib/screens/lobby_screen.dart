@@ -21,6 +21,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
   List<dynamic> _players = [];
   bool _isHost = false;
   bool _joined = false;
+  bool _connecting = false;
   String? _error;
 
   String get _playerName {
@@ -158,19 +159,36 @@ class _LobbyScreenState extends State<LobbyScreen> {
         ),
       );
 
-  void _createRoom() {
-    setState(() => _error = null);
+  Future<void> _createRoom() async {
+    if (!await _connectForRoom()) return;
     _socket.createRoom(_playerName, uid: FirebaseAuth.instance.currentUser?.uid);
   }
 
-  void _joinRoom() {
+  Future<void> _joinRoom() async {
     final code = _codeController.text.trim().toUpperCase();
     if (code.length != 6) {
       setState(() => _error = 'Room code must be 6 characters');
       return;
     }
-    setState(() => _error = null);
+    if (!await _connectForRoom()) return;
     _socket.joinRoom(code, _playerName, uid: FirebaseAuth.instance.currentUser?.uid);
+  }
+
+  Future<bool> _connectForRoom() async {
+    if (_connecting) return false;
+    setState(() {
+      _connecting = true;
+      _error = 'Connecting to server...';
+    });
+    final connected = await _socket.waitForConnection();
+    if (!mounted) return false;
+    setState(() {
+      _connecting = false;
+      _error = connected
+          ? null
+          : 'Cannot reach game server: ${_socket.lastConnectionError ?? 'connection timed out'}. Check internet and try again.';
+    });
+    return connected;
   }
 
   void _toggleReady() => _socket.toggleReady();
@@ -244,13 +262,13 @@ class _LobbyScreenState extends State<LobbyScreen> {
                             SizedBox(
                               width: 90,
                               child: ElevatedButton(
-                                  onPressed: _joinRoom, child: const Text('Join')),
+                                  onPressed: _connecting ? null : _joinRoom, child: const Text('Join')),
                             ),
                           ],
                         ),
                         const SizedBox(height: 12),
                         OutlinedButton(
-                            onPressed: _createRoom,
+                            onPressed: _connecting ? null : _createRoom,
                             child: const Text('Create New Room')),
                         if (_error != null)
                           Padding(
