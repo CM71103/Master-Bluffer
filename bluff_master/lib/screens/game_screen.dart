@@ -66,17 +66,6 @@ class _GameScreenState extends State<GameScreen>{
       setState((){
         _phase = data['phase'];
         if(data['timer']!=null) _timer = data['timer'];
-        if(data['currentRound']!=null) _currentRound = data['currentRound'];
-        if(data['totalRounds']!=null) _totalRounds = data['totalRounds'];
-        if(data['phase']=='word-reveal'){
-          // a new round has begun: clear everything from the previous one
-          _result = null;
-          _clues = [];
-          _hasClued = false;
-          _hasVoted = false;
-          _saved = false;
-          _clueController.clear();
-        }
         if(data['phase']=='clue') {
           _clueController.clear();
           _clues = [];
@@ -109,8 +98,6 @@ class _GameScreenState extends State<GameScreen>{
       setState((){
         _result = data;
         _phase = 'results';
-        if(data['round']!=null) _currentRound = data['round'];
-        if(data['totalRounds']!=null) _totalRounds = data['totalRounds'];
       });
       _onResults(data);
     });
@@ -467,12 +454,15 @@ class _GameScreenState extends State<GameScreen>{
             ),
           ),
           SizedBox(height:32),
-          Text(
-            _result?['isLastRound']==true
-                ? 'Final scores coming up...'
-                : 'Round $_currentRound of $_totalRounds done. Next round starting soon...',
-            style:TextStyle(color:Colors.grey),
-            textAlign:TextAlign.center,
+          Text('New round Starting soon...',style:TextStyle(color:Colors.grey)),
+          SizedBox(height:16),
+          Padding(
+            padding:EdgeInsets.symmetric(horizontal:32),
+            child:ElevatedButton.icon(
+              icon:Icon(Icons.meeting_room),
+              label:Text('Back to Lobby'),
+              onPressed:()=>Navigator.pop(context),
+            ),
           ),
         ]
       )
