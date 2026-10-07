@@ -26,6 +26,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
   bool _connecting = false;
   String? _error;
   Timer? _roomRequestTimer;
+  int _rounds = 1;
 
   String get _playerName {
     final user = FirebaseAuth.instance.currentUser;
@@ -173,7 +174,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
   Future<void> _createRoom() async {
     if (!await _connectForRoom()) return;
     _beginRoomRequest('Creating room...');
-    _socket.createRoom(_playerName, uid: FirebaseAuth.instance.currentUser?.uid);
+    _socket.createRoom(_playerName, uid: FirebaseAuth.instance.currentUser?.uid, rounds: _rounds);
   }
 
   Future<void> _joinRoom() async {
@@ -290,6 +291,21 @@ class _LobbyScreenState extends State<LobbyScreen> {
                               width: 90,
                               child: ElevatedButton(
                                   onPressed: _connecting ? null : _joinRoom, child: const Text('Join')),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            const Text('Rounds: ', style: TextStyle(color: Colors.grey)),
+                            DropdownButton<int>(
+                              value: _rounds,
+                              dropdownColor: Colors.grey.shade900,
+                              style: const TextStyle(color: Colors.white),
+                              items: List.generate(10, (i) => i + 1)
+                                  .map((n) => DropdownMenuItem(value: n, child: Text('$n')))
+                                  .toList(),
+                              onChanged: (v) => setState(() => _rounds = v ?? 1),
                             ),
                           ],
                         ),

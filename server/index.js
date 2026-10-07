@@ -94,6 +94,11 @@ function endRound(room){
   if(ties.length>1) mostVoted= ties[Math.floor(Math.random()*ties.length)];
   const imposterCaught = mostVoted==room.imposterId;
   const winner = imposterCaught?'team':'imposter';
+  room.players.forEach(p=>{
+    const wasImposter = p.id==room.imposterId;
+    const won = wasImposter ? winner=='imposter' : winner=='team';
+    if(won) room.scores[p.id] = (room.scores[p.id]||0) + 1;
+  });
   io.to(room.id).emit('round_results',{
     imposterId:room.imposterId,
     imposterName:room.players.find(p=>p.id==room.imposterId)?.name,
@@ -109,12 +114,24 @@ function endRound(room){
     imposterName:room.players.find(p=>p.id==room.imposterId)?.name,
     teamWord:room.teamWord,
     imposterWord:room.imposterWord,
+    round:room.currentRound,
+    totalRounds:room.totalRounds,
     players:room.players.map(p=>{
       const wasImposter = p.id==room.imposterId;
       return {uid:p.uid,name:p.name,wasImposter,won:wasImposter?winner=='imposter':winner=='team'};
     }),
   });
-  setTimeout(()=>resetToLobby(room),10000);
+  room.currentRound++;
+  if(room.currentRound > room.totalRounds){
+    const finalScores = room.players.map(p=>({
+      name:p.name,
+      score:room.scores[p.id]||0,
+    })).sort((a,b)=>b.score-a.score);
+    io.to(room.id).emit('game_over',{scores:finalScores});
+    setTimeout(()=>resetToLobby(room),15000);
+  } else {
+    setTimeout(()=>resetToLobby(room),10000);
+  }
 }
 
 async function resetToLobby(room){
@@ -123,6 +140,7 @@ async function resetToLobby(room){
   room.clues=[];
   room.imposterId=null;
   room.players.forEach(p=>{p.isReady=false;delete p.hasGivenClue;});
+  room.currentRound = 1;
   const pair=await mongo.randomWordPair();
   room.teamWord=pair[0];
   room.imposterWord=pair[1];
@@ -136,10 +154,11 @@ io.on('connection',(socket)=>{
   console.log('connected',socket.id);
 
     // here we listen to an event as it is server side, the event here is create_room and as soon as the event happens Socket.io calls the callback which creates a room ,which is a js object about game room
-  socket.on('create_room',async({playerName,uid})=>{
+  socket.on('create_room',async({playerName,uid,rounds})=>{
     if(getRoomBySocket(socket.id)) return socket.emit('error',{message:'Leave your current room before creating another'});
     const code = genCode();
     const pair = await mongo.randomWordPair();
+    const totalRounds = Math.max(1, Math.min(10, parseInt(rounds) || 1));
     const room = {
       id:code,
       code,hostId:socket.id,
@@ -151,6 +170,9 @@ io.on('connection',(socket)=>{
       clues:[],
       timer:0,
       timerInterval:null,
+      totalRounds,
+      currentRound:1,
+      scores:{},
     };
     rooms.set(code,room);
     mongo.saveRoom(room);
@@ -210,6 +232,7 @@ io.on('connection',(socket)=>{
     const room = getRoomBySocket(socket.id);
     if(!room || room.hostId != socket.id) return;
     if(room.players.length<2) return socket.emit('error',{message:'Need at least 2 players'});
+    if(room.currentRound > room.totalRounds) return socket.emit('error',{message:'All rounds completed'});
 
     const idx = Math.floor(Math.random()*room.players.length);
     room.imposterId = room.players[idx].id;

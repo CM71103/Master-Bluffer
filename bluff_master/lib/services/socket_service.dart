@@ -82,8 +82,8 @@ class SocketService{
   
   //client->server Actions
   
-  void createRoom(String playerName,{String? uid}){
-    _socket?.emit('create_room',{'playerName':playerName,'uid':uid});
+  void createRoom(String playerName,{String? uid,int rounds=1}){
+    _socket?.emit('create_room',{'playerName':playerName,'uid':uid,'rounds':rounds});
   }
   // here string used is create_room so on server(node.js) also must listen with same string
   
@@ -187,6 +187,11 @@ class SocketService{
   void onRoomReset(Function(Map) cb){
     _socket?.off('room_reset');
     _socket?.on('room_reset',(data)=>cb(data as Map));
+  }
+
+  void onGameOver(Function(Map) cb){
+    _socket?.off('game_over');
+    _socket?.on('game_over',(data)=>cb(data as Map));
   }
 
 

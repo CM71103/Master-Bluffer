@@ -27,6 +27,9 @@ class _GameScreenState extends State<GameScreen>{
   bool _hasVoted = false;
   bool _hasClued = false;
   Map? _result;
+  int _currentRound = 1;
+  int _totalRounds = 1;
+  Map? _gameOver;
 
   String get _playerName{
     final user = FirebaseAuth.instance.currentUser;
@@ -106,11 +109,22 @@ class _GameScreenState extends State<GameScreen>{
         _isImposter = null;
         _clues=[];
         _result=null;
+        _gameOver=null;
         _hasClued = false;
         _hasVoted = false;
         _players=data['players'] as List;
+        _currentRound = data['currentRound'] ?? 1;
+        _totalRounds = data['totalRounds'] ?? 1;
       });
       if(Navigator.canPop(context)) Navigator.pop(context);
+    });
+
+    _socket.onGameOver((data){
+      if(!mounted) return;
+      setState((){
+        _gameOver = data;
+        _phase = 'game-over';
+      });
     });
 
     _socket.onPlayersUpdated((data){
@@ -181,6 +195,7 @@ class _GameScreenState extends State<GameScreen>{
       case 'clue': return _buildCluePhase();
       case 'voting': return _buildVoting();
       case 'results': return _buildResults();
+      case 'game-over': return _buildGameOver();
       default:
         return Center(child:CircularProgressIndicator.adaptive());
     }
@@ -482,6 +497,66 @@ class _GameScreenState extends State<GameScreen>{
           Text(
             '${_timer.toString().padLeft(2,'0')}s',
             style:TextStyle(fontSize:20,fontWeight:FontWeight.bold,color:Colors.white),
+          ),
+          Spacer(),
+          Text(
+            'Round $_currentRound/$_totalRounds',
+            style:TextStyle(fontSize:14,fontWeight:FontWeight.bold,color:Colors.white70),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGameOver(){
+    final scores = _gameOver?['scores'] as List? ?? [];
+    return _scrollableCentered(
+      Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children:[
+          Icon(Icons.emoji_events, size:100, color:Colors.amber),
+          SizedBox(height:24),
+          Text(
+            'GAME OVER',
+            style:TextStyle(fontSize:36,fontWeight:FontWeight.bold,color:Colors.white),
+          ),
+          SizedBox(height:24),
+          Container(
+            padding:EdgeInsets.all(24),
+            decoration:BoxDecoration(
+              color:Colors.grey.shade900,
+              borderRadius:BorderRadius.circular(16),
+            ),
+            child:Column(
+              children:[
+                Text('Final Scores',style:TextStyle(color:Colors.grey,fontSize:16)),
+                SizedBox(height:16),
+                ...List.generate(scores.length, (index) {
+                  final player = scores[index];
+                  return Padding(
+                    padding:const EdgeInsets.symmetric(vertical:4),
+                    child:Row(
+                      mainAxisAlignment:MainAxisAlignment.spaceBetween,
+                      children:[
+                        Text('${index+1}. ${player['name']}',style:TextStyle(color:Colors.white,fontSize:18)),
+                        Text('${player['score']}',style:TextStyle(color:Colors.amber,fontSize:18,fontWeight:FontWeight.bold)),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+          SizedBox(height:32),
+          Text('Returning to lobby...',style:TextStyle(color:Colors.grey)),
+          SizedBox(height:16),
+          Padding(
+            padding:EdgeInsets.symmetric(horizontal:32),
+            child:ElevatedButton.icon(
+              icon:Icon(Icons.meeting_room),
+              label:Text('Back to Lobby'),
+              onPressed:()=>Navigator.pop(context),
+            ),
           ),
         ],
       ),
