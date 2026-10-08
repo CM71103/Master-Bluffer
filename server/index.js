@@ -82,6 +82,7 @@ async function beginRound(room){
 }
 
 function startCluePhase(room){
+  clearInterval(room.timerInterval);
   room.phase='clue';
   room.clues=[];
   room.timer=60;
@@ -97,6 +98,7 @@ function startCluePhase(room){
 }
 
 function startVotingPhase(room){
+  clearInterval(room.timerInterval);
   room.phase='voting';
   room.votes={};
   room.timer=60;
@@ -296,6 +298,10 @@ io.on('connection',(socket)=>{
     player.hasGivenClue=true;
     room.clues.push({playerId:socket.id,playerName,clue});
     io.to(room.id).emit('clue_submitted',room.clues);
+    // Everyone has clued in: skip the rest of the timer and move straight to voting.
+    if(room.players.length>0 && room.players.every(p=>p.hasGivenClue)){
+      startVotingPhase(room);
+    }
   })
 
   socket.on('submit_vote',({votedPlayerId})=>{
