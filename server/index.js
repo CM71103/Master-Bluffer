@@ -34,7 +34,6 @@ const rooms = new Map();
 
 // Round-flow timings (ms).
 const WORD_REVEAL_MS = 5000;       // players study their secret word
-const NEXT_ROUND_DELAY_MS = 8000;  // results screen before the next round auto-starts
 const GAME_OVER_DELAY_MS = 15000;  // final scoreboard before returning to the lobby
 
 function genCode(){
@@ -52,23 +51,21 @@ function getRoomBySocket(socketId){
   return null;
 }
 
-// Starts a single round: fresh words, a new imposter, then the word-reveal countdown.
-// Used both by the host's "start game" action and by the automatic round advance.
-async function beginRound(room){
-  // If the room emptied out while results were showing, fall back to the lobby.
-  if(room.players.length<2 || room.currentRound > room.totalRounds){
-    return resetToLobby(room, room.currentRound > room.totalRounds);
-  }
-  room.phase='word-reveal';
-  room.votes={};
-  room.clues=[];
-  room.players.forEach(p=>{delete p.hasGivenClue;});
+// Starts the game: fresh words, a new imposter, then the word-reveal countdown.
+// Called once when the host starts the game. The word and imposter stay the
+// same for every round — only the clues accumulate.
+async function startGame(room){
+  if(room.players.length<2) return;
   const pair=await mongo.randomWordPair();
   room.teamWord=pair[0];
   room.imposterWord=pair[1];
   const idx=Math.floor(Math.random()*room.players.length);
   room.imposterId=room.players[idx].id;
+  room.currentRound=1;
+  room.votes={};
+  room.clues=[];
   room.players.forEach(p=>{
+    delete p.hasGivenClue;
     const isImp=p.id==room.imposterId;
     io.to(p.id).emit('role_assigned',{isImposter:isImp,word:isImp?room.imposterWord:room.teamWord});
   });
@@ -81,22 +78,35 @@ async function beginRound(room){
   setTimeout(()=>startCluePhase(room),WORD_REVEAL_MS);
 }
 
+// Starts a clue phase for the current round. Clues accumulate across rounds.
 function startCluePhase(room){
   clearInterval(room.timerInterval);
   room.phase='clue';
-  room.clues=[];
   room.timer=60;
+  room.players.forEach(p=>{delete p.hasGivenClue;});
   io.to(room.id).emit('phase_change',{phase:'clue',timer:room.timer,currentRound:room.currentRound,totalRounds:room.totalRounds});
   room.timerInterval = setInterval(()=>{
     room.timer--;
     io.to(room.id).emit('timer_tick',room.timer);
     if(room.timer<=0){
       clearInterval(room.timerInterval);
-      startVotingPhase(room);
+      afterCluePhase(room);
     }
   },1000);
 }
 
+// Called after a clue phase ends: advance to the next round, or start the
+// final voting phase once every round has been played.
+function afterCluePhase(room){
+  if(room.currentRound >= room.totalRounds){
+    startVotingPhase(room);
+  } else {
+    room.currentRound++;
+    startCluePhase(room);
+  }
+}
+
+// Starts the voting phase (called only after the final round's clue phase).
 function startVotingPhase(room){
   clearInterval(room.timerInterval);
   room.phase='voting';
@@ -109,15 +119,15 @@ function startVotingPhase(room){
     io.to(room.id).emit('timer_tick',room.timer);
     if(room.timer<=0){
       clearInterval(room.timerInterval);
-      endRound(room);
+      endGame(room);
     }
   },1000);
 }
 
-function endRound(room){
+// Ends the game after the final vote: show results, then reset to lobby.
+function endGame(room){
   clearInterval(room.timerInterval);
   room.phase='results';
-  const playedRound = room.currentRound;
   const voteCounts={};
   room.players.forEach(p=>voteCounts[p.id]=0);
   Object.values(room.votes).forEach(votedId=>{
@@ -137,9 +147,6 @@ function endRound(room){
     if(won) room.scores[p.id] = (room.scores[p.id]||0) + 1;
   });
 
-  // Move the counter forward, then decide what happens next.
-  room.currentRound = playedRound + 1;
-  const isFinalRound = room.currentRound > room.totalRounds;
   const standings = room.players
     .map(p=>({name:p.name,score:room.scores[p.id]||0}))
     .sort((a,b)=>b.score-a.score);
@@ -152,10 +159,9 @@ function endRound(room){
     voteCounts,winner,
     teamWord:room.teamWord,
     imposterWord:room.imposterWord,
-    playedRound,
     currentRound:room.currentRound,
     totalRounds:room.totalRounds,
-    isFinalRound,
+    isFinalRound:true,
     scores:standings,
   });
   mongo.saveGame({
@@ -164,7 +170,7 @@ function endRound(room){
     imposterName:room.players.find(p=>p.id==room.imposterId)?.name,
     teamWord:room.teamWord,
     imposterWord:room.imposterWord,
-    round:playedRound,
+    round:room.totalRounds,
     totalRounds:room.totalRounds,
     players:room.players.map(p=>{
       const wasImposter = p.id==room.imposterId;
@@ -172,13 +178,8 @@ function endRound(room){
     }),
   });
 
-  if(isFinalRound){
-    io.to(room.id).emit('game_over',{scores:standings});
-    setTimeout(()=>resetToLobby(room,true),GAME_OVER_DELAY_MS);
-  } else {
-    // Every vote is in (or the timer ran out): roll straight into the next round.
-    setTimeout(()=>beginRound(room),NEXT_ROUND_DELAY_MS);
-  }
+  io.to(room.id).emit('game_over',{scores:standings});
+  setTimeout(()=>resetToLobby(room,true),GAME_OVER_DELAY_MS);
 }
 
 async function resetToLobby(room,gameFinished=false){
@@ -287,7 +288,7 @@ io.on('connection',(socket)=>{
     if(room.players.length<2) return socket.emit('error',{message:'Need at least 2 players'});
     if(room.currentRound > room.totalRounds) return socket.emit('error',{message:'All rounds completed'});
 
-    beginRound(room);
+    startGame(room);
   });
 
   socket.on('submit_clue',({clue,playerName})=>{
@@ -298,9 +299,9 @@ io.on('connection',(socket)=>{
     player.hasGivenClue=true;
     room.clues.push({playerId:socket.id,playerName,clue});
     io.to(room.id).emit('clue_submitted',room.clues);
-    // Everyone has clued in: skip the rest of the timer and move straight to voting.
+    // Everyone has clued in: skip the rest of the timer and advance.
     if(room.players.length>0 && room.players.every(p=>p.hasGivenClue)){
-      startVotingPhase(room);
+      afterCluePhase(room);
     }
   })
 
@@ -315,7 +316,7 @@ io.on('connection',(socket)=>{
       hasVoted:true,
     });
     if(Object.keys(room.votes).length===room.players.length){
-      endRound(room);
+      endGame(room);
     }
   });
 

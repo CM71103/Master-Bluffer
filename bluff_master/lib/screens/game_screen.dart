@@ -79,7 +79,6 @@ class _GameScreenState extends State<GameScreen>{
         }
         if(data['phase']=='clue') {
           _clueController.clear();
-          _clues = [];
           _hasClued = false;
         }
         if(data['phase']=='voting') _hasVoted = false;
@@ -470,9 +469,7 @@ class _GameScreenState extends State<GameScreen>{
           _buildRunningScores(),
           SizedBox(height:24),
           Text(
-            _result?['isFinalRound']==true
-                ? 'Final round complete — tallying the scores...'
-                : 'Round ${_result?['currentRound'] ?? _currentRound} of $_totalRounds starts in a few seconds...',
+            'Game over — showing final results...',
             textAlign: TextAlign.center,
             style: const TextStyle(color: Colors.grey),
           ),
