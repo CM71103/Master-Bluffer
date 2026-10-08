@@ -4,5 +4,5 @@ const String _override = String.fromEnvironment('SERVER_URL');
 
 String get serverUrl {
   if (_override.isNotEmpty) return _override.replaceFirst(RegExp(r'/$'), '');
-  return 'https://bluff-master-server.onrender.com';
+  return 'https://master-bluffer-1.onrender.com';
 }
