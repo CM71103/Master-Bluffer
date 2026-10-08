@@ -32,6 +32,11 @@ const WORD_PAIRS = [
 
 const rooms = new Map();
 
+// Round-flow timings (ms).
+const WORD_REVEAL_MS = 5000;       // players study their secret word
+const NEXT_ROUND_DELAY_MS = 8000;  // results screen before the next round auto-starts
+const GAME_OVER_DELAY_MS = 15000;  // final scoreboard before returning to the lobby
+
 function genCode(){
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   let c = ''; 
@@ -47,11 +52,40 @@ function getRoomBySocket(socketId){
   return null;
 }
 
+// Starts a single round: fresh words, a new imposter, then the word-reveal countdown.
+// Used both by the host's "start game" action and by the automatic round advance.
+async function beginRound(room){
+  // If the room emptied out while results were showing, fall back to the lobby.
+  if(room.players.length<2 || room.currentRound > room.totalRounds){
+    return resetToLobby(room, room.currentRound > room.totalRounds);
+  }
+  room.phase='word-reveal';
+  room.votes={};
+  room.clues=[];
+  room.players.forEach(p=>{delete p.hasGivenClue;});
+  const pair=await mongo.randomWordPair();
+  room.teamWord=pair[0];
+  room.imposterWord=pair[1];
+  const idx=Math.floor(Math.random()*room.players.length);
+  room.imposterId=room.players[idx].id;
+  room.players.forEach(p=>{
+    const isImp=p.id==room.imposterId;
+    io.to(p.id).emit('role_assigned',{isImposter:isImp,word:isImp?room.imposterWord:room.teamWord});
+  });
+  io.to(room.id).emit('phase_change',{
+    phase:'word-reveal',
+    timer:Math.round(WORD_REVEAL_MS/1000),
+    currentRound:room.currentRound,
+    totalRounds:room.totalRounds,
+  });
+  setTimeout(()=>startCluePhase(room),WORD_REVEAL_MS);
+}
+
 function startCluePhase(room){
   room.phase='clue';
   room.clues=[];
   room.timer=60;
-  io.to(room.id).emit('phase_change',{phase:'clue',timer:room.timer});
+  io.to(room.id).emit('phase_change',{phase:'clue',timer:room.timer,currentRound:room.currentRound,totalRounds:room.totalRounds});
   room.timerInterval = setInterval(()=>{
     room.timer--;
     io.to(room.id).emit('timer_tick',room.timer);
@@ -66,7 +100,7 @@ function startVotingPhase(room){
   room.phase='voting';
   room.votes={};
   room.timer=60;
-  io.to(room.id).emit('phase_change',{phase:'voting',timer:room.timer});
+  io.to(room.id).emit('phase_change',{phase:'voting',timer:room.timer,currentRound:room.currentRound,totalRounds:room.totalRounds});
   io.to(room.id).emit('players_updated',room.players);
   room.timerInterval = setInterval(()=>{
     room.timer--;
@@ -81,6 +115,7 @@ function startVotingPhase(room){
 function endRound(room){
   clearInterval(room.timerInterval);
   room.phase='results';
+  const playedRound = room.currentRound;
   const voteCounts={};
   room.players.forEach(p=>voteCounts[p.id]=0);
   Object.values(room.votes).forEach(votedId=>{
@@ -99,6 +134,14 @@ function endRound(room){
     const won = wasImposter ? winner=='imposter' : winner=='team';
     if(won) room.scores[p.id] = (room.scores[p.id]||0) + 1;
   });
+
+  // Move the counter forward, then decide what happens next.
+  room.currentRound = playedRound + 1;
+  const isFinalRound = room.currentRound > room.totalRounds;
+  const standings = room.players
+    .map(p=>({name:p.name,score:room.scores[p.id]||0}))
+    .sort((a,b)=>b.score-a.score);
+
   io.to(room.id).emit('round_results',{
     imposterId:room.imposterId,
     imposterName:room.players.find(p=>p.id==room.imposterId)?.name,
@@ -107,6 +150,11 @@ function endRound(room){
     voteCounts,winner,
     teamWord:room.teamWord,
     imposterWord:room.imposterWord,
+    playedRound,
+    currentRound:room.currentRound,
+    totalRounds:room.totalRounds,
+    isFinalRound,
+    scores:standings,
   });
   mongo.saveGame({
     roomCode:room.code,
@@ -114,33 +162,35 @@ function endRound(room){
     imposterName:room.players.find(p=>p.id==room.imposterId)?.name,
     teamWord:room.teamWord,
     imposterWord:room.imposterWord,
-    round:room.currentRound,
+    round:playedRound,
     totalRounds:room.totalRounds,
     players:room.players.map(p=>{
       const wasImposter = p.id==room.imposterId;
       return {uid:p.uid,name:p.name,wasImposter,won:wasImposter?winner=='imposter':winner=='team'};
     }),
   });
-  room.currentRound++;
-  if(room.currentRound > room.totalRounds){
-    const finalScores = room.players.map(p=>({
-      name:p.name,
-      score:room.scores[p.id]||0,
-    })).sort((a,b)=>b.score-a.score);
-    io.to(room.id).emit('game_over',{scores:finalScores});
-    setTimeout(()=>resetToLobby(room),15000);
+
+  if(isFinalRound){
+    io.to(room.id).emit('game_over',{scores:standings});
+    setTimeout(()=>resetToLobby(room,true),GAME_OVER_DELAY_MS);
   } else {
-    setTimeout(()=>resetToLobby(room),10000);
+    // Every vote is in (or the timer ran out): roll straight into the next round.
+    setTimeout(()=>beginRound(room),NEXT_ROUND_DELAY_MS);
   }
 }
 
-async function resetToLobby(room){
+async function resetToLobby(room,gameFinished=false){
+  clearInterval(room.timerInterval);
   room.phase='lobby';
   room.votes={};
   room.clues=[];
   room.imposterId=null;
   room.players.forEach(p=>{p.isReady=false;delete p.hasGivenClue;});
-  room.currentRound = 1;
+  // Only wipe the round counter and scores once the whole game is finished.
+  if(gameFinished){
+    room.currentRound=1;
+    room.scores={};
+  }
   const pair=await mongo.randomWordPair();
   room.teamWord=pair[0];
   room.imposterWord=pair[1];
@@ -231,17 +281,11 @@ io.on('connection',(socket)=>{
   socket.on('start_game',()=>{
     const room = getRoomBySocket(socket.id);
     if(!room || room.hostId != socket.id) return;
+    if(room.phase!=='lobby') return socket.emit('error',{message:'A round is already in progress'});
     if(room.players.length<2) return socket.emit('error',{message:'Need at least 2 players'});
     if(room.currentRound > room.totalRounds) return socket.emit('error',{message:'All rounds completed'});
 
-    const idx = Math.floor(Math.random()*room.players.length);
-    room.imposterId = room.players[idx].id;
-    room.players.forEach(p=>{
-      const isImp=p.id==room.imposterId;
-      io.to(p.id).emit('role_assigned',{isImposter:isImp,word:isImp?room.imposterWord : room.teamWord});
-    });
-    io.to(room.id).emit('phase_change',{phase:'word-reveal',timer:5});
-    setTimeout(()=>startCluePhase(room),5000);
+    beginRound(room);
   });
 
   socket.on('submit_clue',({clue,playerName})=>{

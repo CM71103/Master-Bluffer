@@ -66,6 +66,17 @@ class _GameScreenState extends State<GameScreen>{
       setState((){
         _phase = data['phase'];
         if(data['timer']!=null) _timer = data['timer'];
+        if(data['currentRound']!=null) _currentRound = data['currentRound'];
+        if(data['totalRounds']!=null) _totalRounds = data['totalRounds'];
+        if(data['phase']=='word-reveal') {
+          // A fresh round is starting: drop everything from the previous one.
+          _result = null;
+          _gameOver = null;
+          _saved = false;
+          _clues = [];
+          _hasClued = false;
+          _hasVoted = false;
+        }
         if(data['phase']=='clue') {
           _clueController.clear();
           _clues = [];
@@ -98,6 +109,8 @@ class _GameScreenState extends State<GameScreen>{
       setState((){
         _result = data;
         _phase = 'results';
+        if(data['currentRound']!=null) _currentRound = data['currentRound'];
+        if(data['totalRounds']!=null) _totalRounds = data['totalRounds'];
       });
       _onResults(data);
     });
@@ -453,8 +466,16 @@ class _GameScreenState extends State<GameScreen>{
               ],
             ),
           ),
-          SizedBox(height:32),
-          Text('New round Starting soon...',style:TextStyle(color:Colors.grey)),
+          SizedBox(height:24),
+          _buildRunningScores(),
+          SizedBox(height:24),
+          Text(
+            _result?['isFinalRound']==true
+                ? 'Final round complete — tallying the scores...'
+                : 'Round ${_result?['currentRound'] ?? _currentRound} of $_totalRounds starts in a few seconds...',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.grey),
+          ),
           SizedBox(height:16),
           Padding(
             padding:EdgeInsets.symmetric(horizontal:32),
@@ -466,6 +487,38 @@ class _GameScreenState extends State<GameScreen>{
           ),
         ]
       )
+    );
+  }
+
+  Widget _buildRunningScores(){
+    final scores = _result?['scores'] as List? ?? [];
+    if(scores.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          const Text('Scoreboard', style: TextStyle(color: Colors.grey, fontSize: 14)),
+          const SizedBox(height: 8),
+          ...List.generate(scores.length, (index) {
+            final p = scores[index];
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('${index + 1}. ${p['name']}', style: const TextStyle(color: Colors.white)),
+                  Text('${p['score']}',
+                      style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
     );
   }
 
