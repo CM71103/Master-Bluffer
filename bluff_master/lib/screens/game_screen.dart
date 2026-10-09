@@ -89,9 +89,8 @@ class _GameScreenState extends State<GameScreen>{
       if(!mounted) return;
       setState(() {
         _clues = data;
-        _hasClued = data.any((clue) => clue['playerId'] == _socket.playerId);
       });
-      });
+    });
 
     _socket.onTimerTick((data){
       if(!mounted) return;
