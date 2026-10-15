@@ -22,6 +22,7 @@ class _GameScreenState extends State<GameScreen>{
   String? _myWord;
   bool?  _isImposter;
   int _timer=0;
+  int _timerMax=60;
   List<dynamic> _clues = [];
   List<dynamic> _players = [];
   bool _hasVoted = false;
@@ -65,7 +66,10 @@ class _GameScreenState extends State<GameScreen>{
       if(!mounted) return;
       setState((){
         _phase = data['phase'];
-        if(data['timer']!=null) _timer = data['timer'];
+        if(data['timer']!=null) {
+          _timer = data['timer'];
+          _timerMax = _timer > 0 ? _timer : 1;
+        }
         if(data['currentRound']!=null) _currentRound = data['currentRound'];
         if(data['totalRounds']!=null) _totalRounds = data['totalRounds'];
         if(data['phase']=='word-reveal') {
@@ -303,6 +307,33 @@ class _GameScreenState extends State<GameScreen>{
           ),
         ),
         const SizedBox(height: 24),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Clues sent this round: ${_players.where((p) => p['hasGivenClue'] == true).length}/${_players.length}',
+                style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _players.map((player) {
+                  final sent = player['hasGivenClue'] == true;
+                  return Chip(
+                    avatar: Icon(sent ? Icons.check_circle : Icons.hourglass_empty,
+                        color: sent ? Colors.greenAccent : Colors.white70, size: 18),
+                    label: Text('${player['name']}', style: const TextStyle(color: Colors.white)),
+                    backgroundColor: sent ? Colors.green.shade900 : Colors.grey.shade800,
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16),
           child: Text('Room clues • visible to everyone in this game',
@@ -378,6 +409,7 @@ class _GameScreenState extends State<GameScreen>{
             children: List.generate(_players.length, (index) {
               final player = _players[index];
               final isMe = player['id'] ==_socket.playerId;
+              final playerClues = _clues.where((clue) => clue['playerId'] == player['id']).toList();
               return Card(
                 margin:EdgeInsets.only(bottom:8),
                 color:Colors.grey.shade800,
@@ -393,6 +425,13 @@ class _GameScreenState extends State<GameScreen>{
                     '${player['name']}${isMe?' (You)':''}',
                     style:TextStyle(color:Colors.white),
                   ),
+                   subtitle: Text(
+                     playerClues.isEmpty
+                         ? 'No clues submitted'
+                         : playerClues.map((clue) =>
+                             'Round ${clue['round'] ?? '?'}: ${clue['clue']}').join('  •  '),
+                     style: const TextStyle(color: Colors.amber),
+                   ),
                   trailing:Icon(
                     Icons.person_search,color:Colors.red,
                   ),
@@ -535,22 +574,36 @@ class _GameScreenState extends State<GameScreen>{
   }
 
   Widget _buildTimerBar(){
+    final remaining = (_timer / _timerMax).clamp(0.0, 1.0);
+    final timerColor = remaining <= 0.2
+        ? Colors.redAccent
+        : remaining <= 0.5 ? Colors.amber : Colors.greenAccent;
     return Container(
-      width:double.infinity,
-      padding:EdgeInsets.symmetric(horizontal:16,vertical:12),
-      color:Colors.deepPurple.shade900,
-      child:Row(
-        children:[
-          Icon(Icons.timer,color:Colors.amber),
-          SizedBox(width:8),
-          Text(
-            '${_timer.toString().padLeft(2,'0')}s',
-            style:TextStyle(fontSize:20,fontWeight:FontWeight.bold,color:Colors.white),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      color: Colors.deepPurple.shade900,
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(Icons.timer, color: timerColor),
+              const SizedBox(width: 8),
+              Text('${_timer.toString().padLeft(2,'0')}s',
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
+              const Spacer(),
+              Text(_phase == 'voting' ? 'Final vote' : 'Round $_currentRound/$_totalRounds',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white70)),
+            ],
           ),
-          Spacer(),
-          Text(
-            'Round $_currentRound/$_totalRounds',
-            style:TextStyle(fontSize:14,fontWeight:FontWeight.bold,color:Colors.white70),
+          const SizedBox(height: 8),
+          LinearProgressIndicator(
+            value: remaining,
+            minHeight: 6,
+            borderRadius: BorderRadius.circular(6),
+            backgroundColor: Colors.white24,
+            valueColor: AlwaysStoppedAnimation<Color>(timerColor),
+            semanticsLabel: 'Time remaining',
+            semanticsValue: '$_timer seconds',
           ),
         ],
       ),

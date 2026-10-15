@@ -7,7 +7,6 @@ const mongo = require('./db');
 
 const app = express();
 app.use(cors());
-// ---- REST API (MongoDB) used by the Flutter app ----
 app.get('/health',(req,res)=>res.json({ok:true,mongo:mongo.isConnected()}));
 const safe = (fn)=>async(req,res)=>{
   try{ res.json(await fn(req)); }
@@ -85,6 +84,7 @@ function startCluePhase(room){
   room.timer=60;
   room.players.forEach(p=>{delete p.hasGivenClue;});
   io.to(room.id).emit('phase_change',{phase:'clue',timer:room.timer,currentRound:room.currentRound,totalRounds:room.totalRounds});
+  io.to(room.id).emit('players_updated',room.players);
   room.timerInterval = setInterval(()=>{
     room.timer--;
     io.to(room.id).emit('timer_tick',room.timer);
@@ -297,8 +297,9 @@ io.on('connection',(socket)=>{
     const player=room.players.find(p=>p.id===socket.id);
     if(!player||player.hasGivenClue) return;
     player.hasGivenClue=true;
-    room.clues.push({playerId:socket.id,playerName,clue});
+    room.clues.push({playerId:socket.id,playerName,clue,round:room.currentRound});
     io.to(room.id).emit('clue_submitted',room.clues);
+    io.to(room.id).emit('players_updated',room.players);
     // Everyone has clued in: skip the rest of the timer and advance.
     if(room.players.length>0 && room.players.every(p=>p.hasGivenClue)){
       afterCluePhase(room);
