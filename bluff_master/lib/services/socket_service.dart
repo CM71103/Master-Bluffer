@@ -104,8 +104,18 @@ class SocketService{
 
   void startGame()=>_socket?.emit('start_game');  
 
-  void submitClue(String clue,String playerName){
-    _socket?.emit('submit_clue',{'clue':clue,'playerName':playerName});
+  Future<Map> submitClue(String clue) async {
+    if (!isConnected) return {'ok': false, 'message': 'Disconnected from game server. Rejoin the room.'};
+    try {
+      final response = await _socket!.emitWithAckAsync(
+        'submit_clue', {'clue': clue}, ack: null,
+      ).timeout(const Duration(seconds: 8));
+      return response is Map ? response : {'ok': false, 'message': 'Invalid server response'};
+    } on TimeoutException {
+      return {'ok': false, 'message': 'No response from server. Check connection or update the server.'};
+    } catch (_) {
+      return {'ok': false, 'message': 'Could not send clue. Please try again.'};
+    }
   }
 
   void submitVote(String votedPlayerId){

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import '../services/socket_service.dart';
 import '../services/firestore_service.dart';
 import '../services/notification_service.dart';
@@ -27,15 +26,12 @@ class _GameScreenState extends State<GameScreen>{
   List<dynamic> _players = [];
   bool _hasVoted = false;
   bool _hasClued = false;
+  bool _sendingClue = false;
+  String? _clueError;
   Map? _result;
   int _currentRound = 1;
   int _totalRounds = 1;
   Map? _gameOver;
-
-  String get _playerName{
-    final user = FirebaseAuth.instance.currentUser;
-    return user?.isAnonymous==true?"Guest":(user?.displayName ?? user?.email??"Player").toString();
-  }
 
   @override
   void initState(){
@@ -84,6 +80,8 @@ class _GameScreenState extends State<GameScreen>{
         if(data['phase']=='clue') {
           _clueController.clear();
           _hasClued = false;
+          _sendingClue = false;
+          _clueError = null;
         }
         if(data['phase']=='voting') _hasVoted = false;
       });
@@ -93,6 +91,11 @@ class _GameScreenState extends State<GameScreen>{
       if(!mounted) return;
       setState(() {
         _clues = data;
+        if (data.any((clue) => clue['playerId'] == _socket.playerId && clue['round'] == _currentRound)) {
+          _hasClued = true;
+          _clueError = null;
+          _clueController.clear();
+        }
       });
     });
 
@@ -172,12 +175,23 @@ class _GameScreenState extends State<GameScreen>{
     );
   }
 
-  void _submitClue(){
+  Future<void> _submitClue() async {
     final clue = _clueController.text.trim();
-    if(clue.isEmpty || _hasClued) return;
-    setState(() => _hasClued = true);
-    _socket.submitClue(clue,_playerName);
-    _clueController.clear();
+    if(clue.isEmpty || _hasClued || _sendingClue || _phase != 'clue') return;
+    final round = _currentRound;
+    setState(() { _sendingClue = true; _clueError = null; });
+    final response = await _socket.submitClue(clue);
+    if (!mounted || _phase != 'clue' || _currentRound != round) return;
+    setState(() {
+      _sendingClue = false;
+      if (response['ok'] == true) {
+        _hasClued = true;
+        _clueController.clear();
+        if (response['clues'] is List) _clues = response['clues'] as List;
+      } else if (!_hasClued) {
+        _clueError = (response['message'] ?? 'Clue was not sent').toString();
+      }
+    });
   }
 
   void _submitVote(String playerid){
@@ -285,11 +299,11 @@ class _GameScreenState extends State<GameScreen>{
               Expanded(
                 child: TextField(
                   controller: _clueController,
-                  enabled: !_hasClued,
+                   enabled: !_hasClued && !_sendingClue,
                   style: const TextStyle(color: Colors.white),
                   textInputAction: TextInputAction.send,
                   decoration: InputDecoration(
-                    hintText: _hasClued ? 'Clue sent!' : 'Type one word clue...',
+                     hintText: _hasClued ? 'Clue sent!' : _sendingClue ? 'Sending...' : 'Type one word clue...',
                   ),
                   onSubmitted: (_) => _submitClue(),
                 ),
@@ -299,13 +313,18 @@ class _GameScreenState extends State<GameScreen>{
                 width: 76,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(minimumSize: const Size(0, 50)),
-                  onPressed: _hasClued ? null : _submitClue,
+                   onPressed: _hasClued || _sendingClue ? null : _submitClue,
                   child: const Text('Send'),
                 ),
               ),
             ],
           ),
         ),
+         if (_clueError != null)
+           Padding(
+             padding: const EdgeInsets.symmetric(horizontal: 16),
+             child: Text(_clueError!, style: const TextStyle(color: Colors.redAccent)),
+           ),
         const SizedBox(height: 24),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),

@@ -291,15 +291,18 @@ io.on('connection',(socket)=>{
     startGame(room);
   });
 
-  socket.on('submit_clue',({clue,playerName})=>{
+  socket.on('submit_clue',({clue},ack)=>{
+    const reply = typeof ack === 'function' ? ack : ()=>{};
     const room = getRoomBySocket(socket.id);
-    if(!room || room.phase!=='clue') return;
+    if(!room || room.phase!=='clue') return reply({ok:false,message:'Clue phase has ended or you are no longer in this room'});
     const player=room.players.find(p=>p.id===socket.id);
-    if(!player||player.hasGivenClue) return;
+    if(!player||player.hasGivenClue) return reply({ok:false,message:'You already sent a clue this round'});
+    if(typeof clue !== 'string' || !clue.trim()) return reply({ok:false,message:'Enter a clue first'});
     player.hasGivenClue=true;
-    room.clues.push({playerId:socket.id,playerName,clue,round:room.currentRound});
+    room.clues.push({playerId:socket.id,playerName:player.name,clue:clue.trim(),round:room.currentRound});
     io.to(room.id).emit('clue_submitted',room.clues);
     io.to(room.id).emit('players_updated',room.players);
+    reply({ok:true,clues:room.clues});
     // Everyone has clued in: skip the rest of the timer and advance.
     if(room.players.length>0 && room.players.every(p=>p.hasGivenClue)){
       afterCluePhase(room);
