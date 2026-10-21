@@ -4,6 +4,7 @@ const {Server} = require('socket.io');
 const cors = require('cors');
 require('dotenv').config();
 const mongo = require('./db');
+const { CATEGORIES, DEFAULT_CATEGORY } = require('./word_bank');
 
 const app = express();
 app.use(cors());
@@ -21,15 +22,14 @@ const server = http.createServer(app);
 const io = new Server(server,{cors:{origin:"*"}});
 
 
-const WORD_PAIRS = [
-  ["Pizza","Oven"],["Dog","Cat"],["Sun","Moon"],
-  ["Coffee","Tea"],["Beach","Pool"],["Car","Bike"],
-  ["Book","Pen"],["Ice","Snow"],["Bird","Fish"],
-  ["King","Queen"],["Gold","Silver"],["Fire","Smoke"],
-];
-
-
 const rooms = new Map();
+
+// Never send secret words or the imposter ID in lobby snapshots.
+function lobbySnapshot(room){
+  return {code:room.code,hostId:room.hostId,players:room.players,
+    phase:room.phase,totalRounds:room.totalRounds,currentRound:room.currentRound,
+    category:room.category};
+}
 
 // Round-flow timings (ms).
 const WORD_REVEAL_MS = 5000;       // players study their secret word
@@ -55,7 +55,8 @@ function getRoomBySocket(socketId){
 // same for every round — only the clues accumulate.
 async function startGame(room){
   if(room.players.length<2) return;
-  const pair=await mongo.randomWordPair();
+  room.phase='word-reveal';
+  const pair=await mongo.randomWordPair(room.category);
   room.teamWord=pair[0];
   room.imposterWord=pair[1];
   const idx=Math.floor(Math.random()*room.players.length);
@@ -194,10 +195,9 @@ async function resetToLobby(room,gameFinished=false){
     room.currentRound=1;
     room.scores={};
   }
-  const pair=await mongo.randomWordPair();
-  room.teamWord=pair[0];
-  room.imposterWord=pair[1];
-  io.to(room.id).emit('room_reset',room);
+  room.teamWord=null;
+  room.imposterWord=null;
+  io.to(room.id).emit('room_reset',lobbySnapshot(room));
   io.to(room.id).emit('players_updated',room.players);
 }
 
@@ -207,17 +207,18 @@ io.on('connection',(socket)=>{
   console.log('connected',socket.id);
 
     // here we listen to an event as it is server side, the event here is create_room and as soon as the event happens Socket.io calls the callback which creates a room ,which is a js object about game room
-  socket.on('create_room',async({playerName,uid,rounds})=>{
+  socket.on('create_room',async({playerName,uid,rounds,category})=>{
     if(getRoomBySocket(socket.id)) return socket.emit('error',{message:'Leave your current room before creating another'});
+    if(category != null && !CATEGORIES.includes(category)) return socket.emit('error',{message:'Invalid word category'});
     const code = genCode();
-    const pair = await mongo.randomWordPair();
     const totalRounds = Math.max(1, Math.min(10, parseInt(rounds) || 1));
     const room = {
       id:code,
       code,hostId:socket.id,
       players:[{id:socket.id,uid:uid||null,name:playerName,isReady:false}],
       phase:'lobby',
-      teamWord:pair[0],imposterWord:pair[1],
+      category:category || DEFAULT_CATEGORY,
+      teamWord:null,imposterWord:null,
       imposterId:null,
       votes:{},
       clues:[],
@@ -232,7 +233,7 @@ io.on('connection',(socket)=>{
     // as rooms is a Map it stores the code:room as a key value pair
     socket.join(code), 
     // After socket.join(code), that socket belongs to the Socket.IO room identified by that code.
-    io.to(code).emit('room_created',room);
+    io.to(code).emit('room_created',lobbySnapshot(room));
     // it broadcasts the 'room_created' event and its room data exclusively to all sockets(users) that have joined the room named code
     // here io.to(code) creates a virtual channel so when brodacasted it doesn't go out and interfer with other channels
 
@@ -252,8 +253,18 @@ io.on('connection',(socket)=>{
     if(room.players.length>=10) return socket.emit("error",{message:'Room already full'});
     room.players.push({id:socket.id,uid:uid||null,name:playerName,isReady:false});
     socket.join(room.code);
-    socket.emit('room_joined',room);
+    socket.emit('room_joined',lobbySnapshot(room));
     io.to(room.code).emit('players_updated',room.players);
+   });
+
+   socket.on('set_category',({category})=>{
+     const room = getRoomBySocket(socket.id);
+     if(!room || room.hostId!==socket.id || room.phase!=='lobby')
+       return socket.emit('error',{message:'Only the host can change category in the lobby'});
+     if(!CATEGORIES.includes(category))
+       return socket.emit('error',{message:'Invalid word category'});
+     room.category=category;
+     io.to(room.id).emit('category_updated',{category});
    });
 
   socket.on('leave_room',()=>{

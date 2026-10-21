@@ -82,8 +82,8 @@ class SocketService{
   
   //client->server Actions
   
-  void createRoom(String playerName,{String? uid,int rounds=1}){
-    _socket?.emit('create_room',{'playerName':playerName,'uid':uid,'rounds':rounds});
+  void createRoom(String playerName,{String? uid,int rounds=1,String category='foods'}){
+    _socket?.emit('create_room',{'playerName':playerName,'uid':uid,'rounds':rounds,'category':category});
   }
   // here string used is create_room so on server(node.js) also must listen with same string
   
@@ -93,6 +93,13 @@ class SocketService{
 
   void toggleReady(){
     _socket?.emit('toggle_ready');
+  }
+
+  void setCategory(String category) => _socket?.emit('set_category',{'category':category});
+
+  void onCategoryUpdated(Function(Map) cb){
+    _socket?.off('category_updated');
+    _socket?.on('category_updated',(data)=>cb(data as Map));
   }
 
   void leaveRoom(){

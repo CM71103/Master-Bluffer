@@ -27,6 +27,11 @@ class _LobbyScreenState extends State<LobbyScreen> {
   String? _error;
   Timer? _roomRequestTimer;
   int _rounds = 1;
+  String _category = 'foods';
+  static const _categories = <String, String>{
+    'foods': 'Foods', 'football': 'Football',
+    'animals': 'Animals', 'places': 'Places',
+  };
 
   String get _playerName {
     final user = FirebaseAuth.instance.currentUser;
@@ -51,6 +56,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
         _isHost = true;
         _joined = true;
         _players = (data['players'] as List).toList();
+        _category = (data['category'] as String?) ?? 'foods';
         _error = null;
         _connecting = false;
       });
@@ -66,6 +72,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
         _isHost = data['hostId'] == _socket.playerId;
         _joined = true;
         _players = (data['players'] as List).toList();
+        _category = (data['category'] as String?) ?? 'foods';
         _error = null;
         _connecting = false;
       });
@@ -81,6 +88,11 @@ class _LobbyScreenState extends State<LobbyScreen> {
     _socket.onHostChanged((data) {
       if (!mounted) return;
       setState(() => _isHost = data['hostId'] == _socket.playerId);
+    });
+
+    _socket.onCategoryUpdated((data) {
+      if (!mounted) return;
+      setState(() => _category = data['category'] as String);
     });
 
     _socket.onError((data) {
@@ -174,7 +186,8 @@ class _LobbyScreenState extends State<LobbyScreen> {
   Future<void> _createRoom() async {
     if (!await _connectForRoom()) return;
     _beginRoomRequest('Creating room...');
-    _socket.createRoom(_playerName, uid: FirebaseAuth.instance.currentUser?.uid, rounds: _rounds);
+    _socket.createRoom(_playerName, uid: FirebaseAuth.instance.currentUser?.uid,
+        rounds: _rounds, category: _category);
   }
 
   Future<void> _joinRoom() async {
@@ -310,6 +323,18 @@ class _LobbyScreenState extends State<LobbyScreen> {
                           ],
                         ),
                         const SizedBox(height: 12),
+                        DropdownButtonFormField<String>(
+                          initialValue: _category,
+                          decoration: const InputDecoration(labelText: 'Word category'),
+                          dropdownColor: Colors.grey.shade900,
+                          items: _categories.entries.map((entry) => DropdownMenuItem(
+                            value: entry.key, child: Text(entry.value),
+                          )).toList(),
+                          onChanged: _connecting ? null : (value) {
+                            if (value != null) setState(() => _category = value);
+                          },
+                        ),
+                        const SizedBox(height: 12),
                         OutlinedButton(
                             onPressed: _connecting ? null : _createRoom,
                             child: const Text('Create New Room')),
@@ -361,6 +386,24 @@ class _LobbyScreenState extends State<LobbyScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.category_outlined),
+                    title: const Text('Word category'),
+                    trailing: _isHost ? DropdownButton<String>(
+                      value: _category,
+                      dropdownColor: Colors.grey.shade900,
+                      items: _categories.entries.map((entry) => DropdownMenuItem(
+                        value: entry.key, child: Text(entry.value),
+                      )).toList(),
+                      onChanged: (value) {
+                        if (value != null) _socket.setCategory(value);
+                      },
+                    ) : null,
+                    subtitle: _isHost ? const Text('Choose before starting')
+                        : Text(_categories[_category] ?? _category),
+                  ),
+                ),
                 ...List.generate(_players.length, (index) {
                       final player = _players[index];
                       final isMe = player['id'] == _socket.playerId;

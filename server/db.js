@@ -1,15 +1,9 @@
 // MongoDB layer. If MONGODB_URI is not set (or the connection fails) every
 // function falls back safely, so the game still works without a database.
 const { MongoClient, ObjectId } = require('mongodb');
+const { WORD_BANK, CATEGORIES, DEFAULT_CATEGORY } = require('./word_bank');
 
 let db = null;
-
-const DEFAULT_WORDS = [
-  ['Pizza', 'Oven'], ['Dog', 'Cat'], ['Sun', 'Moon'],
-  ['Coffee', 'Tea'], ['Beach', 'Pool'], ['Car', 'Bike'],
-  ['Book', 'Pen'], ['Ice', 'Snow'], ['Bird', 'Fish'],
-  ['King', 'Queen'], ['Gold', 'Silver'], ['Fire', 'Smoke'],
-];
 
 async function connect() {
   const uri = process.env.MONGODB_URI;
@@ -22,11 +16,14 @@ async function connect() {
     await client.connect();
     db = client.db(process.env.MONGODB_DB || 'bluff_master');
     await db.collection('games').createIndex({ 'players.uid': 1, playedAt: -1 });
-    // Seed the word bank the first time.
+    // Seed each curated pair idempotently, even for databases with old,
+    // uncategorized word documents. Old documents are ignored by lookup.
     const words = db.collection('words');
-    if ((await words.countDocuments()) === 0) {
-      await words.insertMany(DEFAULT_WORDS.map(([team, imposter]) => ({ team, imposter })));
-    }
+    const entries = Object.entries(WORD_BANK).flatMap(([category, pairs]) =>
+      pairs.map(([team, imposter]) => ({ category, team, imposter })));
+    await words.bulkWrite(entries.map((pair) => ({
+      updateOne: { filter: pair, update: { $setOnInsert: pair }, upsert: true },
+    })));
     console.log('MongoDB connected');
   } catch (e) {
     console.log('MongoDB connection failed:', e.message);
@@ -36,15 +33,21 @@ async function connect() {
 
 const isConnected = () => db !== null;
 
-/** Random [teamWord, imposterWord] from the words collection. */
-async function randomWordPair() {
+/** Random [teamWord, imposterWord] in the selected category. */
+async function randomWordPair(category = DEFAULT_CATEGORY) {
+  if (!CATEGORIES.includes(category)) throw new Error('Invalid word category');
   if (db) {
     try {
-      const [doc] = await db.collection('words').aggregate([{ $sample: { size: 1 } }]).toArray();
-      if (doc) return [doc.team, doc.imposter];
+      const [doc] = await db.collection('words').aggregate([
+        { $match: { category, team: { $type: 'string' }, imposter: { $type: 'string' } } },
+        { $sample: { size: 1 } },
+      ]).toArray();
+      if (doc && doc.team.trim() && doc.imposter.trim() && doc.team !== doc.imposter)
+        return [doc.team, doc.imposter];
     } catch (e) { console.log('word lookup failed:', e.message); }
   }
-  return DEFAULT_WORDS[Math.floor(Math.random() * DEFAULT_WORDS.length)];
+  const pairs = WORD_BANK[category];
+  return pairs[Math.floor(Math.random() * pairs.length)];
 }
 
 async function saveRoom(room) {
