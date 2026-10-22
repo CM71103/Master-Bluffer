@@ -1,0 +1,690 @@
+import 'package:flutter/material.dart';
+import '../services/socket_service.dart';
+import '../services/firestore_service.dart';
+import '../services/notification_service.dart';
+import '../theme.dart';
+
+
+class GameScreen extends StatefulWidget{
+  const GameScreen({super.key});
+
+  @override
+  State<GameScreen> createState()=> _GameScreenState();
+}
+
+class _GameScreenState extends State<GameScreen>{
+  
+  final SocketService _socket = SocketService.instance;
+  final TextEditingController _clueController = TextEditingController();
+
+  String _phase = 'word-reveal';
+  String? _myWord;
+  bool?  _isImposter;
+  int _timer=0;
+  int _timerMax=60;
+  List<dynamic> _clues = [];
+  List<dynamic> _players = [];
+  bool _hasVoted = false;
+  bool _hasClued = false;
+  bool _sendingClue = false;
+  String? _clueError;
+  Map? _result;
+  int _currentRound = 1;
+  int _totalRounds = 1;
+  Map? _gameOver;
+
+  @override
+  void initState(){
+    super.initState();
+    _socket.connect();
+    _setupListeners();
+    final saved = SocketService.instance.currentPlayers;
+    if(saved!=null) _players=saved;
+    final role = SocketService.instance.lastRole;
+    if(role!=null){
+      _myWord = role['word'];
+      _isImposter = role['isImposter'];
+    }
+  }
+
+
+
+  void _setupListeners(){
+    _socket.onRoleAssigned((data){
+      if(!mounted) return;
+      setState((){
+        _myWord = data['word'];
+        _isImposter = data['isImposter'];
+      });
+    });
+
+    _socket.onPhaseChange((data){
+      if(!mounted) return;
+      setState((){
+        _phase = data['phase'];
+        if(data['timer']!=null) {
+          _timer = data['timer'];
+          _timerMax = _timer > 0 ? _timer : 1;
+        }
+        if(data['currentRound']!=null) _currentRound = data['currentRound'];
+        if(data['totalRounds']!=null) _totalRounds = data['totalRounds'];
+        if(data['phase']=='word-reveal') {
+          // A fresh round is starting: drop everything from the previous one.
+          _result = null;
+          _gameOver = null;
+          _saved = false;
+          _clues = [];
+          _hasClued = false;
+          _hasVoted = false;
+        }
+        if(data['phase']=='clue') {
+          _clueController.clear();
+          _hasClued = false;
+          _sendingClue = false;
+          _clueError = null;
+        }
+        if(data['phase']=='voting') _hasVoted = false;
+      });
+    });
+
+    _socket.onClueSubmitted((data){
+      if(!mounted) return;
+      setState(() {
+        _clues = data;
+        if (data.any((clue) => clue['playerId'] == _socket.playerId && clue['round'] == _currentRound)) {
+          _hasClued = true;
+          _clueError = null;
+          _clueController.clear();
+        }
+      });
+    });
+
+    _socket.onTimerTick((data){
+      if(!mounted) return;
+      setState(()=>_timer=data);
+    });
+
+    _socket.onVotesUpdated((data){
+      if(!mounted) return;
+      setState(()=>_hasVoted = data['hasVoted']==true);
+    });
+
+    _socket.onRoundResults((data){
+      if(!mounted) return;
+      setState((){
+        _result = data;
+        _phase = 'results';
+        if(data['currentRound']!=null) _currentRound = data['currentRound'];
+        if(data['totalRounds']!=null) _totalRounds = data['totalRounds'];
+      });
+      _onResults(data);
+    });
+
+    _socket.onRoomReset((data){
+      if(!mounted) return;
+      setState((){
+        _myWord = null;
+        _isImposter = null;
+        _clues=[];
+        _result=null;
+        _gameOver=null;
+        _hasClued = false;
+        _hasVoted = false;
+        _players=data['players'] as List;
+        _currentRound = data['currentRound'] ?? 1;
+        _totalRounds = data['totalRounds'] ?? 1;
+      });
+      if(Navigator.canPop(context)) Navigator.pop(context);
+    });
+
+    _socket.onGameOver((data){
+      if(!mounted) return;
+      setState((){
+        _gameOver = data;
+        _phase = 'game-over';
+      });
+    });
+
+    _socket.onPlayersUpdated((data){
+      if(!mounted) return;
+      setState(()=>_players=data);
+    });
+  }
+
+  bool _saved = false;
+
+  // Saves the finished game to Firebase and shows a device notification.
+  void _onResults(Map data){
+    if(_saved) return;
+    _saved = true;
+    final teamWon = data['winner']=='team';
+    final won = _isImposter==true ? !teamWon : teamWon;
+    FirestoreService.instance.saveGameResult(
+      roomCode: SocketService.instance.roomCode ?? '',
+      wasImposter: _isImposter==true,
+      won: won,
+      imposterName: (data['imposterName'] ?? '').toString(),
+      teamWord: (data['teamWord'] ?? '').toString(),
+      imposterWord: (data['imposterWord'] ?? '').toString(),
+    ).catchError((Object error) {
+      debugPrint('Could not save game history to Firestore: $error');
+    });
+    NotificationService.instance.show(
+      won ? 'You won!' : 'You lost',
+      teamWon ? 'The team caught the imposter.' : 'The imposter got away.',
+    );
+  }
+
+  Future<void> _submitClue() async {
+    final clue = _clueController.text.trim();
+    if(clue.isEmpty || _hasClued || _sendingClue || _phase != 'clue') return;
+    final round = _currentRound;
+    setState(() { _sendingClue = true; _clueError = null; });
+    final response = await _socket.submitClue(clue);
+    if (!mounted || _phase != 'clue' || _currentRound != round) return;
+    setState(() {
+      _sendingClue = false;
+      if (response['ok'] == true) {
+        _hasClued = true;
+        _clueController.clear();
+        if (response['clues'] is List) _clues = response['clues'] as List;
+      } else if (!_hasClued) {
+        _clueError = (response['message'] ?? 'Clue was not sent').toString();
+      }
+    });
+  }
+
+  void _submitVote(String playerid){
+    if(_hasVoted) return;
+    _hasVoted = true;
+    _socket.submitVote(playerid);
+  }
+
+  @override
+  void dispose(){
+    _clueController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context){
+    return Scaffold(
+      backgroundColor:kBg,
+      appBar:AppBar(
+        title:Text('Bluff Master'),
+        automaticallyImplyLeading:false,
+      ),
+      body:ResponsiveBody(maxWidth:600,child:_buildPhase()),
+    );
+  }
+
+  Widget _buildPhase(){
+    switch (_phase){
+      case 'word-reveal': return _buildWordReveal();
+      case 'clue': return _buildCluePhase();
+      case 'voting': return _buildVoting();
+      case 'results': return _buildResults();
+      case 'game-over': return _buildGameOver();
+      default:
+        return Center(child:CircularProgressIndicator.adaptive());
+    }
+  }
+
+  Widget _buildWordReveal(){
+    return _scrollableCentered(
+      Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children:[
+          Icon(
+            _isImposter ==true ? Icons.theater_comedy : Icons.group,
+            size:100,
+            color:_isImposter==true ? Colors.red:Colors.green, 
+          ),
+          SizedBox(height:24),
+          Text(
+            _isImposter==true ? "You're Imposter" : "You're on the TEAM",
+            style:TextStyle(fontSize:28,fontWeight:FontWeight.bold,color:Colors.white),
+            textAlign:TextAlign.center, 
+          ),
+          SizedBox(height:16),
+          Text(
+            _isImposter==true
+                ? 'Everyone else knows the real word.\nYou must bluff!'
+                : 'Everyone has the same word.\nFind the imposter!',
+            style:TextStyle(color:Colors.grey,fontSize:16),
+            textAlign:TextAlign.center,
+          ),
+          SizedBox(height:32),
+          Container(
+            padding:EdgeInsets.all(32),
+            decoration:BoxDecoration(
+              color:Colors.grey.shade900,
+              borderRadius:BorderRadius.circular(16),
+              border:Border.all(
+                color:_isImposter==true ? Colors.red:Colors.green,
+                width:2,
+              ),
+            ),
+            child:Column(
+              children:[
+                Text('YOUR SECRET WORD',style:TextStyle(color:Colors.grey,fontSize:14,letterSpacing:2)),
+                SizedBox(height:8),
+                Text(
+                  _myWord ?? '???',
+                  style:TextStyle(
+                    fontSize:32,
+                    fontWeight:FontWeight.bold,color:Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height:24),
+          Text('Waiting for clue phase...', style:TextStyle(color:Colors.grey))
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCluePhase(){
+    return ListView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      children:[
+        _buildTimerBar(),
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _clueController,
+                   enabled: !_hasClued && !_sendingClue,
+                  style: const TextStyle(color: Colors.white),
+                  textInputAction: TextInputAction.send,
+                  decoration: InputDecoration(
+                     hintText: _hasClued ? 'Clue sent!' : _sendingClue ? 'Sending...' : 'Type one word clue...',
+                  ),
+                  onSubmitted: (_) => _submitClue(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 76,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(minimumSize: const Size(0, 50)),
+                   onPressed: _hasClued || _sendingClue ? null : _submitClue,
+                  child: const Text('Send'),
+                ),
+              ),
+            ],
+          ),
+        ),
+         if (_clueError != null)
+           Padding(
+             padding: const EdgeInsets.symmetric(horizontal: 16),
+             child: Text(_clueError!, style: const TextStyle(color: Colors.redAccent)),
+           ),
+        const SizedBox(height: 24),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Clues sent this round: ${_players.where((p) => p['hasGivenClue'] == true).length}/${_players.length}',
+                style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _players.map((player) {
+                  final sent = player['hasGivenClue'] == true;
+                  return Chip(
+                    avatar: Icon(sent ? Icons.check_circle : Icons.hourglass_empty,
+                        color: sent ? Colors.greenAccent : Colors.white70, size: 18),
+                    label: Text('${player['name']}', style: const TextStyle(color: Colors.white)),
+                    backgroundColor: sent ? Colors.green.shade900 : Colors.grey.shade800,
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: Text('Room clues • visible to everyone in this game',
+              style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+        ),
+        if (_clues.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('No clues yet. Be the first to send one!',
+                style: TextStyle(color: Colors.white54)),
+          ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: List.generate(_clues.length, (index) {
+              final clue = _clues[index];
+              final isMe = clue['playerId'] == _socket.playerId;
+              return Card(
+                margin:EdgeInsets.only(bottom:8),
+                color:isMe ? Colors.deepPurple:Colors.grey.shade900,
+                child:ListTile(
+                  leading:CircleAvatar(
+                    backgroundColor:Colors.deepPurple,
+                    child:Text(
+                      (clue['playerName'] as String)[0].toUpperCase(),
+                      style:TextStyle(
+                        color:Colors.white
+                      ),
+                    ),
+                  ),
+                  title:Text(
+                    '${clue["playerName"]} ${isMe? ' (You)':''}',
+                    style:TextStyle(color:Colors.white),
+                  ),
+                  subtitle:Text(
+                    clue['clue'],
+                    style:TextStyle(color:Colors.amber,fontSize:16),
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVoting(){
+    return ListView(
+      children:[
+        _buildTimerBar(),
+        Padding(
+          padding:EdgeInsets.all(16),
+          child:Container(
+            padding:EdgeInsets.all(16),
+            decoration:BoxDecoration(
+              color:Colors.red.shade900,
+              borderRadius: BorderRadius.circular(12),
+              border:Border.all(color:Colors.red),
+            ),
+            child:Text(
+              _hasVoted
+              ? 'Vote Submitted! Waiting for others...'
+              :'Who do you think is the Imposter?',
+              textAlign:TextAlign.center,
+              style:TextStyle(fontSize:18,fontWeight:FontWeight.bold,color:Colors.white),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: List.generate(_players.length, (index) {
+              final player = _players[index];
+              final isMe = player['id'] ==_socket.playerId;
+              final playerClues = _clues.where((clue) => clue['playerId'] == player['id']).toList();
+              return Card(
+                margin:EdgeInsets.only(bottom:8),
+                color:Colors.grey.shade800,
+                child:ListTile(
+                  leading:CircleAvatar(
+                    backgroundColor:Colors.deepPurple,
+                    child:Text(
+                      (player['name'] as String)[0].toUpperCase(),
+                      style:TextStyle(color:Colors.white),
+                    ),
+                  ),
+                  title:Text(
+                    '${player['name']}${isMe?' (You)':''}',
+                    style:TextStyle(color:Colors.white),
+                  ),
+                   subtitle: Text(
+                     playerClues.isEmpty
+                         ? 'No clues submitted'
+                         : playerClues.map((clue) =>
+                             'Round ${clue['round'] ?? '?'}: ${clue['clue']}').join('  •  '),
+                     style: const TextStyle(color: Colors.amber),
+                   ),
+                  trailing:Icon(
+                    Icons.person_search,color:Colors.red,
+                  ),
+                  onTap:(){
+                    if (!_hasVoted) _submitVote(player['id']);
+                  }
+                ),
+              );
+            }),
+          )
+        )
+      ],
+    );
+  }
+
+
+  Widget _buildResults(){
+    final winner = _result?['winner'];
+    final imposterName = _result?['imposterName'];
+    final teamWon = winner=='team';
+    return _scrollableCentered(
+      Column(
+        mainAxisAlignment:MainAxisAlignment.center,
+        children:[
+          Icon(
+            teamWon ? Icons.emoji_events:Icons.sentiment_very_dissatisfied,
+            size:100,
+            color:teamWon ? Colors.green:Colors.red,
+          ),
+          SizedBox(height:24),
+          Text(
+            teamWon ? 'TEAM WINS!': 'IMPOSTER WINS!',
+            style:TextStyle(fontSize:36,fontWeight:FontWeight.bold,color : teamWon ? Colors.green:Colors.red),
+          ),
+          SizedBox(height:16),
+          Container(
+            padding:EdgeInsets.all(24),
+            decoration:BoxDecoration(
+              color:Colors.grey.shade900,
+              borderRadius:BorderRadius.circular(16),
+            ),
+            child:Column(
+              children:[
+                Text('The Imposter was:',style:TextStyle(color:Colors.grey)),
+                SizedBox(height:8),
+                Text(
+                  imposterName ?? '???',
+                  style:TextStyle(fontSize:28,fontWeight:FontWeight.bold,color:Colors.white),
+                ),
+                SizedBox(height:16),
+                Row(
+                  mainAxisAlignment:MainAxisAlignment.center,
+                  children:[
+                    Column(
+                      children:[
+                        Text('Team Word',style:TextStyle(color:Colors.grey,fontSize:12)),
+                        Text(_result?['teamWord'] ?? '???',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold,color:Colors.green)),
+                      ],
+                    ),
+                    SizedBox(width:32),
+                    Column(
+                      children:[
+                        Text('Imposter Word',style:TextStyle(color:Colors.grey,fontSize:12)),
+                        Text(_result?['imposterWord'] ?? '???',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold,color:Colors.red))
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height:24),
+          _buildRunningScores(),
+          SizedBox(height:24),
+          Text(
+            'Game over — showing final results...',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.grey),
+          ),
+          SizedBox(height:16),
+          Padding(
+            padding:EdgeInsets.symmetric(horizontal:32),
+            child:ElevatedButton.icon(
+              icon:Icon(Icons.meeting_room),
+              label:Text('Back to Lobby'),
+              onPressed:()=>Navigator.pop(context),
+            ),
+          ),
+        ]
+      )
+    );
+  }
+
+  Widget _buildRunningScores(){
+    final scores = _result?['scores'] as List? ?? [];
+    if(scores.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          const Text('Scoreboard', style: TextStyle(color: Colors.grey, fontSize: 14)),
+          const SizedBox(height: 8),
+          ...List.generate(scores.length, (index) {
+            final p = scores[index];
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('${index + 1}. ${p['name']}', style: const TextStyle(color: Colors.white)),
+                  Text('${p['score']}',
+                      style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _scrollableCentered(Widget child) {
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimerBar(){
+    final remaining = (_timer / _timerMax).clamp(0.0, 1.0);
+    final timerColor = remaining <= 0.2
+        ? Colors.redAccent
+        : remaining <= 0.5 ? Colors.amber : Colors.greenAccent;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      color: Colors.deepPurple.shade900,
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(Icons.timer, color: timerColor),
+              const SizedBox(width: 8),
+              Text('${_timer.toString().padLeft(2,'0')}s',
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
+              const Spacer(),
+              Text(_phase == 'voting' ? 'Final vote' : 'Round $_currentRound/$_totalRounds',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white70)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          LinearProgressIndicator(
+            value: remaining,
+            minHeight: 6,
+            borderRadius: BorderRadius.circular(6),
+            backgroundColor: Colors.white24,
+            valueColor: AlwaysStoppedAnimation<Color>(timerColor),
+            semanticsLabel: 'Time remaining',
+            semanticsValue: '$_timer seconds',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGameOver(){
+    final scores = _gameOver?['scores'] as List? ?? [];
+    return _scrollableCentered(
+      Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children:[
+          Icon(Icons.emoji_events, size:100, color:Colors.amber),
+          SizedBox(height:24),
+          Text(
+            'GAME OVER',
+            style:TextStyle(fontSize:36,fontWeight:FontWeight.bold,color:Colors.white),
+          ),
+          SizedBox(height:24),
+          Container(
+            padding:EdgeInsets.all(24),
+            decoration:BoxDecoration(
+              color:Colors.grey.shade900,
+              borderRadius:BorderRadius.circular(16),
+            ),
+            child:Column(
+              children:[
+                Text('Final Scores',style:TextStyle(color:Colors.grey,fontSize:16)),
+                SizedBox(height:16),
+                ...List.generate(scores.length, (index) {
+                  final player = scores[index];
+                  return Padding(
+                    padding:const EdgeInsets.symmetric(vertical:4),
+                    child:Row(
+                      mainAxisAlignment:MainAxisAlignment.spaceBetween,
+                      children:[
+                        Text('${index+1}. ${player['name']}',style:TextStyle(color:Colors.white,fontSize:18)),
+                        Text('${player['score']}',style:TextStyle(color:Colors.amber,fontSize:18,fontWeight:FontWeight.bold)),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+          SizedBox(height:32),
+          Text('Returning to lobby...',style:TextStyle(color:Colors.grey)),
+          SizedBox(height:16),
+          Padding(
+            padding:EdgeInsets.symmetric(horizontal:32),
+            child:ElevatedButton.icon(
+              icon:Icon(Icons.meeting_room),
+              label:Text('Back to Lobby'),
+              onPressed:()=>Navigator.pop(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+
+
+
+}

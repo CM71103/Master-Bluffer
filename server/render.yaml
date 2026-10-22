@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bluff-master-server
+    runtime: node
+    rootDir: server
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: bluff_master
