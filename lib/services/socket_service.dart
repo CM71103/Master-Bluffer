@@ -1,0 +1,216 @@
+import 'dart:async';
+
+import 'package:socket_io_client/socket_io_client.dart' as IO;
+import '../config.dart';
+
+class SocketService{
+  // Singleton - one socket connection for the whole app
+  SocketService._internal();
+  // to restrict the use of socket to one instance 
+  static final SocketService instance =  SocketService._internal();
+
+  IO.Socket? _socket;
+  String? lastConnectionError;
+
+  bool get isConnected => _socket?.connected ?? false;
+  String? get playerId => _socket?.id;
+   // we use getter when we want to access method like a variable 
+   // becuase upon keeping getter we are askign dart to recalculate the value when accessing 
+
+  // The server sends role_assigned just before phase_change, i.e. before the
+  // game screen exists, so the role is remembered here.
+  Map? lastRole;
+  String? roomCode;
+
+  List<dynamic>? _currentPlayers;
+  set players(List<dynamic> p){_currentPlayers = p;}
+  List<dynamic>? get currentPlayers => _currentPlayers;
+
+  void connect(){
+    // Reuse the socket while a connection is pending: replacing it here loses
+    // the lobby's event listeners and leaves the old socket reconnecting.
+    if (_socket != null) {
+      if (!isConnected) _socket!.connect();
+      return;
+    }
+
+    _socket = IO.io(serverUrl, <String, dynamic>{
+      // Web and mobile both use WebSocket for the game connection.
+      'transports': ['websocket'],
+      'autoConnect': false,
+      'forceNew': true,
+      'reconnection': true,
+      'timeout': 30000,
+    });
+    // this creates the socket instance with backend url as serverUrl, here transports tell how to connect to server
+    // i)polling: Client sends http req again and again every few secs for new data ,slow more usage 
+    // ii) websocket - one single permanent connection stays open . server can push data instantly
+
+    _socket!.onConnect((_) {
+      lastConnectionError = null;
+      print('Socket connected: ${_socket!.id}');
+    });
+    _socket!.onDisconnect((_)=>print('Socket disconnected'));
+    _socket!.onConnectError((data) {
+      lastConnectionError = data.toString();
+      print('Connect error: $data');
+    });
+    _socket!.connect();
+  }
+
+  Future<bool> waitForConnection({Duration timeout = const Duration(seconds: 60)}) async {
+    connect();
+    if (isConnected) return true;
+    final socket = _socket!;
+    final result = Completer<bool>();
+    void connected(dynamic _) {
+      if (!result.isCompleted) result.complete(true);
+    }
+    socket.onConnect(connected);
+    try {
+      return await result.future.timeout(timeout, onTimeout: () => isConnected);
+    } finally {
+      socket.off('connect', connected);
+    }
+  }
+
+  void disconnect(){
+    _socket?.dispose();
+    _socket = null;
+    lastConnectionError = null;
+  }
+  
+  //client->server Actions
+  
+  void createRoom(String playerName,{String? uid,int rounds=1,String category='foods'}){
+    _socket?.emit('create_room',{'playerName':playerName,'uid':uid,'rounds':rounds,'category':category});
+  }
+  // here string used is create_room so on server(node.js) also must listen with same string
+  
+  void joinRoom(String roomCode,String playerName,{String? uid}){
+    _socket?.emit('join_room',{'roomId':roomCode,'playerName':playerName,'uid':uid});
+  }
+
+  void toggleReady(){
+    _socket?.emit('toggle_ready');
+  }
+
+  void setCategory(String category) => _socket?.emit('set_category',{'category':category});
+
+  void onCategoryUpdated(Function(Map) cb){
+    _socket?.off('category_updated');
+    _socket?.on('category_updated',(data)=>cb(data as Map));
+  }
+
+  void leaveRoom(){
+    _socket?.emit('leave_room');
+    _currentPlayers = null;
+    lastRole = null;
+    roomCode = null;
+  }
+
+  void startGame()=>_socket?.emit('start_game');  
+
+  Future<Map> submitClue(String clue) async {
+    if (!isConnected) return {'ok': false, 'message': 'Disconnected from game server. Rejoin the room.'};
+    try {
+      final response = await _socket!.emitWithAckAsync(
+        'submit_clue', {'clue': clue}, ack: null,
+      ).timeout(const Duration(seconds: 8));
+      return response is Map ? response : {'ok': false, 'message': 'Invalid server response'};
+    } on TimeoutException {
+      return {'ok': false, 'message': 'No response from server. Check connection or update the server.'};
+    } catch (_) {
+      return {'ok': false, 'message': 'Could not send clue. Please try again.'};
+    }
+  }
+
+  void submitVote(String votedPlayerId){
+    _socket?.emit('submit_vote',{'votedPlayerId':votedPlayerId});
+  }
+//---------------------------------------------------------------
+
+  //Event listeners
+
+// it is on the receiving side - it listens for a server event and forwards the data to your UI thr callback 
+// here Function(Map) cb - it is a callback function which we pass and accepts a Map . Here .on() registers a listener on the Socket
+// (data)=>cb(data as Map) - when event arrives socket gives you data 
+  void onRoomCreated(Function(Map) cb){
+    _socket?.off('room_created');
+    _socket?.on('room_created',(data)=>cb(data as Map));
+  }
+
+  void onRoomJoined(Function(Map) cb){
+    _socket?.off('room_joined');
+    _socket?.on('room_joined',(data)=>cb(data as Map));
+  }
+
+  void onHostChanged(Function(Map) cb){
+    _socket?.off('host_changed');
+    _socket?.on('host_changed',(data)=>cb(data as Map));
+  }
+
+  void onPlayersUpdated(Function(List) cb){
+    _socket?.off('players_updated');
+    _socket?.on('players_updated',(data){
+      _currentPlayers=data;
+      cb(data as List);
+    });
+  }
+
+  void onPhaseChange(Function(Map) cb){
+    _socket?.off('phase_change');
+    _socket?.on('phase_change',(data)=>cb(data as Map));
+  }
+
+  void onPlayerJoined(Function(Map) cb){
+    _socket?.off('player_joined');
+    _socket?.on('player_joined',(data)=>cb(data as Map));
+  }
+
+  void onError(Function(Map) cb){
+    _socket?.off('error');
+    _socket?.on('error',(data)=>cb(data as Map));
+  }
+
+  void onRoleAssigned(Function(Map) cb){
+    _socket?.off('role_assigned');
+    _socket?.on('role_assigned',(data){
+      lastRole = data as Map;
+      cb(data);
+    });
+  }
+
+  void onClueSubmitted(Function(List) cb){
+    _socket?.off('clue_submitted');
+    _socket?.on('clue_submitted',(data)=>cb(data as List));
+  }
+
+  void onTimerTick(Function(int) cb){
+    _socket?.off('timer_tick');
+    _socket?.on('timer_tick',(data)=>cb(data as int));
+  }
+
+  void onVotesUpdated(Function(Map) cb){
+    _socket?.off('votes_updated');
+    _socket?.on('votes_updated',(data)=>cb(data as Map));
+  }
+
+  void onRoundResults(Function(Map) cb){
+    _socket?.off('round_results');
+    _socket?.on('round_results',(data)=>cb(data as Map));
+  }
+
+  void onRoomReset(Function(Map) cb){
+    _socket?.off('room_reset');
+    _socket?.on('room_reset',(data)=>cb(data as Map));
+  }
+
+  void onGameOver(Function(Map) cb){
+    _socket?.off('game_over');
+    _socket?.on('game_over',(data)=>cb(data as Map));
+  }
+
+
+
+}
