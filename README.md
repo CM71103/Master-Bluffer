@@ -10,7 +10,7 @@ Features
 - Player profiles, game history, and statistics stored in Firestore.
 - Leaderboard and recent-game endpoints provided by the backend.
 - Local device notifications for supported mobile platforms. Notifications are not supported by the current implementation on web.
-- Flutter screens for login, home, lobby, gameplay, profile, and leaderboard.
+- Flutter screens for login, home, lobby, gameplay, profile, and leaderboard..
 Technology Stack
 Frontend
 - Flutter and Dart
