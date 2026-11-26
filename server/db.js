@@ -1,9 +1,43 @@
 // MongoDB layer. If MONGODB_URI is not set (or the connection fails) every
 // function falls back safely, so the game still works without a database.
 const { MongoClient, ObjectId } = require('mongodb');
+const crypto = require('crypto');
 const { WORD_BANK, CATEGORIES, DEFAULT_CATEGORY } = require('./word_bank');
 
 let db = null;
+
+// Local fallback: a shuffled bag per category. Every pair is handed out once
+// before any pair repeats, and a new cycle never restarts on the pair that just
+// finished the previous one.
+const bags = new Map();
+
+function shuffledPairs(category) {
+  const pool = WORD_BANK[category].slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool;
+}
+
+function nextBankedPair(category) {
+  let bag = bags.get(category);
+  if (!bag) {
+    bag = { pool: [], last: null };
+    bags.set(category, bag);
+  }
+  if (bag.pool.length === 0) {
+    const pool = shuffledPairs(category);
+    if (pool.length > 1 && bag.last && pool[pool.length - 1] === bag.last) {
+      // The next pop() comes from the end: swap it away from the last pair.
+      [pool[0], pool[pool.length - 1]] = [pool[pool.length - 1], pool[0]];
+    }
+    bag.pool = pool;
+  }
+  const pair = bag.pool.pop();
+  bag.last = pair;
+  return pair;
+}
 
 async function connect() {
   const uri = process.env.MONGODB_URI;
@@ -46,8 +80,7 @@ async function randomWordPair(category = DEFAULT_CATEGORY) {
         return [doc.team, doc.imposter];
     } catch (e) { console.log('word lookup failed:', e.message); }
   }
-  const pairs = WORD_BANK[category];
-  return pairs[Math.floor(Math.random() * pairs.length)];
+  return nextBankedPair(category);
 }
 
 async function saveRoom(room) {
