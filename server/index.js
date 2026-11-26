@@ -1,25 +1,57 @@
 const express  = require('express');
 const http = require('http');
+const crypto = require('crypto');
 const {Server} = require('socket.io');
 const cors = require('cors');
+const helmet = require('helmet');
 require('dotenv').config();
 const mongo = require('./db');
 const { CATEGORIES, DEFAULT_CATEGORY } = require('./word_bank');
 
 const app = express();
-app.use(cors());
-app.get('/health',(req,res)=>res.json({ok:true,mongo:mongo.isConnected()}));
+app.use(helmet());
+// Browser CORS: allow-list origins via CORS_ORIGIN (comma-separated). The
+// Flutter mobile/desktop clients do not enforce browser CORS.
+const allowedOrigins = (process.env.CORS_ORIGIN || '').split(',').map(s=>s.trim()).filter(Boolean);
+app.use(cors(allowedOrigins.length ? {origin:allowedOrigins} : {}));
 const safe = (fn)=>async(req,res)=>{
-  try{ res.json(await fn(req)); }
+  try{
+    const out = await fn(req,res);
+    if(!res.headersSent) res.json(out);
+  }
   catch(e){ console.log('api error',e.message); res.status(500).json({error:'server error'}); }
 };
+const badId = (res)=>{
+  res.status(400).json({error:'invalid id'});
+  return true;
+};
+app.get('/health',(req,res)=>res.json({ok:true,mongo:mongo.isConnected()}));
+// Release APK download. Defaults to the Flutter build output; override with APK_PATH.
+const path = require('path');
+const fs = require('fs');
+const APK_PATH = process.env.APK_PATH ||
+  path.join(__dirname,'..','bluff_master','build','app','outputs','flutter-apk','app-release.apk');
+app.get('/download/app-release.apk',(req,res)=>{
+  if(!fs.existsSync(APK_PATH)){ res.status(404).json({error:'apk not built'}); return; }
+  res.download(APK_PATH,'BluffMaster-release.apk');
+});
 app.get('/api/leaderboard',safe(()=>mongo.leaderboard()));
 app.get('/api/recent',safe(()=>mongo.recentGames()));
 app.get('/api/history/:uid',safe((req)=>mongo.history(req.params.uid)));
-app.delete('/api/history/:id/:uid',safe(async(req)=>({ok:await mongo.deleteGame(req.params.id,req.params.uid)})));
+app.delete('/api/history/:id/:uid',safe(async(req,res)=>{
+  if(!/^[a-fA-F0-9]{24}$/.test(req.params.id)){ res.status(400).json({error:'invalid id'}); return; }
+  return {ok:await mongo.deleteGame(req.params.id,req.params.uid)};
+}));
 
 const server = http.createServer(app);
-const io = new Server(server,{cors:{origin:"*"}});
+const io = new Server(server,{cors:{origin:allowedOrigins.length ? allowedOrigins : true}});
+// Max bytes accepted for any client-supplied string field.
+const MAX_NAME = 24;
+const MAX_CLUE = 80;
+const cleanText = (v,max)=>{
+  if(typeof v!=='string') return '';
+  return v.replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,max);
+};
 
 
 const rooms = new Map();
@@ -37,9 +69,9 @@ const GAME_OVER_DELAY_MS = 15000;  // final scoreboard before returning to the l
 
 function genCode(){
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  let c = ''; 
-  for (let i=0;i<6;i++) 
-    c+=chars[Math.floor(Math.random()*chars.length)];
+  let c = '';
+  for (let i=0;i<6;i++)
+    c+=chars[crypto.randomInt(chars.length)];
   return rooms.has(c) ? genCode():c;
 }
 
@@ -59,7 +91,7 @@ async function startGame(room){
   const pair=await mongo.randomWordPair(room.category);
   room.teamWord=pair[0];
   room.imposterWord=pair[1];
-  const idx=Math.floor(Math.random()*room.players.length);
+  const idx=crypto.randomInt(room.players.length);
   room.imposterId=room.players[idx].id;
   room.currentRound=1;
   room.votes={};
@@ -75,7 +107,7 @@ async function startGame(room){
     currentRound:room.currentRound,
     totalRounds:room.totalRounds,
   });
-  setTimeout(()=>startCluePhase(room),WORD_REVEAL_MS);
+  setTimeout(()=>{ if(rooms.has(room.code)) startCluePhase(room); },WORD_REVEAL_MS);
 }
 
 // Starts a clue phase for the current round. Clues accumulate across rounds.
@@ -210,12 +242,14 @@ io.on('connection',(socket)=>{
   socket.on('create_room',async({playerName,uid,rounds,category})=>{
     if(getRoomBySocket(socket.id)) return socket.emit('error',{message:'Leave your current room before creating another'});
     if(category != null && !CATEGORIES.includes(category)) return socket.emit('error',{message:'Invalid word category'});
+    const name = cleanText(playerName,MAX_NAME);
+    if(!name) return socket.emit('error',{message:'Enter a player name'});
     const code = genCode();
     const totalRounds = Math.max(1, Math.min(10, parseInt(rounds) || 1));
     const room = {
       id:code,
       code,hostId:socket.id,
-      players:[{id:socket.id,uid:uid||null,name:playerName,isReady:false}],
+      players:[{id:socket.id,uid:uid||null,name:name,isReady:false}],
       phase:'lobby',
       category:category || DEFAULT_CATEGORY,
       teamWord:null,imposterWord:null,
@@ -231,7 +265,7 @@ io.on('connection',(socket)=>{
     rooms.set(code,room);
     mongo.saveRoom(room);
     // as rooms is a Map it stores the code:room as a key value pair
-    socket.join(code), 
+    socket.join(code),
     // After socket.join(code), that socket belongs to the Socket.IO room identified by that code.
     io.to(code).emit('room_created',lobbySnapshot(room));
     // it broadcasts the 'room_created' event and its room data exclusively to all sockets(users) that have joined the room named code
@@ -239,7 +273,7 @@ io.on('connection',(socket)=>{
 
     console.log('room created',code);
    });
-  
+
    socket.on('join_room',({roomId,playerName,uid})=>{
     if(getRoomBySocket(socket.id)) return socket.emit('error',{message:'You are already in a room'});
     const room = rooms.get(String(roomId || '').toUpperCase());
@@ -251,7 +285,7 @@ io.on('connection',(socket)=>{
       return socket.emit('error',{message:'This account is already in this room'});
     }
     if(room.players.length>=10) return socket.emit("error",{message:'Room already full'});
-    room.players.push({id:socket.id,uid:uid||null,name:playerName,isReady:false});
+    room.players.push({id:socket.id,uid:uid||null,name:cleanText(playerName,MAX_NAME) || 'Player',isReady:false});
     socket.join(room.code);
     socket.emit('room_joined',lobbySnapshot(room));
     io.to(room.code).emit('players_updated',room.players);
@@ -310,7 +344,7 @@ io.on('connection',(socket)=>{
     if(!player||player.hasGivenClue) return reply({ok:false,message:'You already sent a clue this round'});
     if(typeof clue !== 'string' || !clue.trim()) return reply({ok:false,message:'Enter a clue first'});
     player.hasGivenClue=true;
-    room.clues.push({playerId:socket.id,playerName:player.name,clue:clue.trim(),round:room.currentRound});
+    room.clues.push({playerId:socket.id,playerName:player.name,clue:cleanText(clue,MAX_CLUE),round:room.currentRound});
     io.to(room.id).emit('clue_submitted',room.clues);
     io.to(room.id).emit('players_updated',room.players);
     reply({ok:true,clues:room.clues});
@@ -324,6 +358,8 @@ io.on('connection',(socket)=>{
     const room=getRoomBySocket(socket.id);
     if(!room||room.phase!=='voting') return;
     if(room.votes[socket.id]) return;
+    // Reject votes for anything that is not a player currently in this room.
+    if(typeof votedPlayerId!=='string' || !room.players.some(p=>p.id===votedPlayerId)) return;
     room.votes[socket.id]=votedPlayerId;
     io.to(room.id).emit('votes_updated',{
       votesCast:Object.keys(room.votes).length,
@@ -340,7 +376,7 @@ io.on('connection',(socket)=>{
     console.log('disconnected',socket.id);
     for(const [code,room] of rooms){
       room.players = room.players.filter(p=>p.id != socket.id);
-      if(room.players.length===0) { rooms.delete(code); mongo.deleteRoom(code); }
+      if(room.players.length===0) { clearInterval(room.timerInterval); rooms.delete(code); mongo.deleteRoom(code); }
       else io.to(code).emit('players_updated',room.players);
     }
   });
