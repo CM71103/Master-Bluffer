@@ -9,7 +9,12 @@ const mongo = require('./db');
 const { CATEGORIES, DEFAULT_CATEGORY } = require('./word_bank');
 
 const app = express();
-app.use(helmet());
+// Helmet defaults add upgrade-insecure-requests, which rewrites every relative
+// link to https. This server is often served over plain http (local preview),
+// so drop that one directive and keep the rest of the default policy.
+const cspDirectives = helmet.contentSecurityPolicy.getDefaultDirectives();
+delete cspDirectives['upgrade-insecure-requests'];
+app.use(helmet({contentSecurityPolicy:{useDefaults:false,directives:cspDirectives}}));
 // Browser CORS: allow-list origins via CORS_ORIGIN (comma-separated). The
 // Flutter mobile/desktop clients do not enforce browser CORS.
 const allowedOrigins = (process.env.CORS_ORIGIN || '').split(',').map(s=>s.trim()).filter(Boolean);
@@ -26,13 +31,40 @@ const badId = (res)=>{
   return true;
 };
 app.get('/health',(req,res)=>res.json({ok:true,mongo:mongo.isConnected()}));
+// Landing page so the preview host shows the service instead of a 404.
+app.get('/',(req,res)=>{
+  const hasApk = fs.existsSync(APK_PATH);
+  res.type('html').send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bluff Master Server</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f1020;color:#eef;
+       margin:0;display:grid;place-items:center;min-height:100vh;padding:24px}
+  .card{background:#1a1b34;border:1px solid #2c2e55;border-radius:16px;padding:28px 24px;max-width:440px;width:100%}
+  h1{margin:0 0 6px;font-size:20px}
+  p{color:#9aa0c8;font-size:14px;margin:0 0 18px}
+  a.btn{display:block;text-align:center;background:#3f4fd8;color:#fff;text-decoration:none;
+        padding:13px;border-radius:12px;font-weight:600;margin-bottom:10px}
+  code{color:#c9cdf3}
+  .path{display:block;background:#0f1030;border:1px solid #2c2e55;border-radius:10px;
+        padding:11px 12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;
+        color:#dfe3ff;word-break:break-all;user-select:all}
+</style></head>
+<body><div class="card">
+  <h1>Bluff Master server</h1>
+  <p>Socket.IO game backend is running. Status: <code>${mongo.isConnected()?'MongoDB connected':'in-memory (no MongoDB)'}</code></p>
+  ${hasApk?'<p>Android build is available at this path on this server — open it to start the download:</p><code class="path">/download/app-release.apk</code>':'<p>The APK has not been built yet.</p>'}
+</div></body></html>`);
+});
 // Release APK download. Defaults to the Flutter build output; override with APK_PATH.
 const path = require('path');
 const fs = require('fs');
 const APK_PATH = process.env.APK_PATH ||
   path.join(__dirname,'..','bluff_master','build','app','outputs','flutter-apk','app-release.apk');
 app.get('/download/app-release.apk',(req,res)=>{
-  if(!fs.existsSync(APK_PATH)){ res.status(404).json({error:'apk not built'}); return; }
+  if(!fs.existsSync(APK_PATH)){ res.redirect(302,'/'); return; }
   res.download(APK_PATH,'BluffMaster-release.apk');
 });
 app.get('/api/leaderboard',safe(()=>mongo.leaderboard()));
